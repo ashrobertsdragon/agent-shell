@@ -1,4 +1,4 @@
-"""Tests for GitProvider and FilesystemProvider."""
+"""Tests for context providers."""
 
 from __future__ import annotations
 
@@ -7,8 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from agentsh.context.providers.docker import DockerProvider
+from agentsh.context.providers.environment import EnvironmentProvider
 from agentsh.context.providers.filesystem import FilesystemProvider
 from agentsh.context.providers.git import GitProvider
+from agentsh.context.providers.history import HistoryProvider
+from agentsh.context.providers.python_env import PythonEnvProvider
 from agentsh.models import CommandResult
 
 
@@ -66,3 +70,75 @@ async def test_filesystem_provider_returns_fragment(
     result = await provider.collect(shell)
     assert result is not None
     assert "main.py" in result.payload.get("files", [])
+
+
+async def test_python_env_provider(shell: MagicMock) -> None:
+    """PythonEnvProvider returns a fragment with python version info."""
+    shell.execute = AsyncMock(
+        side_effect=[
+            CommandResult(
+                stdout="Python 3.12.0\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd="/repo",
+            ),
+            CommandResult(
+                stdout="none\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd="/repo",
+            ),
+        ]
+    )
+    shell.cwd = AsyncMock(return_value="/repo")
+    provider = PythonEnvProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("python_version") == "3.12.0"
+
+
+async def test_docker_provider_returns_none_without_docker(shell: MagicMock) -> None:
+    """DockerProvider returns None when docker is unavailable."""
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="",
+            stderr="",
+            exit_code=1,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = DockerProvider()
+    result = await provider.collect(shell)
+    assert result is None
+
+
+async def test_history_provider(shell: MagicMock) -> None:
+    """HistoryProvider returns recent shell commands."""
+    shell.history = AsyncMock(return_value=["ls", "cd /tmp", "git status"])
+    provider = HistoryProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["recent"] == ["ls", "cd /tmp", "git status"]
+
+
+async def test_environment_provider(shell: MagicMock) -> None:
+    """EnvironmentProvider filters out sensitive env vars."""
+    shell.env = AsyncMock(
+        return_value={
+            "HOME": "/home/user",
+            "ANTHROPIC_API_KEY": "sk-secret",
+            "PATH": "/usr/bin",
+            "MY_SECRET": "hidden",
+        }
+    )
+    provider = EnvironmentProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    env = result.payload["env"]
+    assert "HOME" in env
+    assert "PATH" in env
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "MY_SECRET" not in env

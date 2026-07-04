@@ -9,13 +9,20 @@ from agentsh.agent.router import AgentRouter
 from agentsh.app import App, AppState
 from agentsh.config import load_config
 from agentsh.context.builder import ContextBuilder
+from agentsh.context.providers.docker import DockerProvider
+from agentsh.context.providers.environment import EnvironmentProvider
 from agentsh.context.providers.filesystem import FilesystemProvider
 from agentsh.context.providers.git import GitProvider
+from agentsh.context.providers.history import HistoryProvider
+from agentsh.context.providers.kubernetes import KubernetesProvider
+from agentsh.context.providers.python_env import PythonEnvProvider
 from agentsh.permissions import PermissionEngine
 from agentsh.repl import run_repl
 from agentsh.shell.bash import BashShell
 from agentsh.tools.protocol import ToolRegistry
+from agentsh.tools.read_file import ReadFile
 from agentsh.tools.run_command import RunCommand
+from agentsh.tools.write_file import WriteFile
 
 
 def _build_app() -> App:
@@ -26,9 +33,19 @@ def _build_app() -> App:
 
     tools = ToolRegistry()
     tools.register(RunCommand(shell=shell, permissions=permissions))
+    tools.register(ReadFile())
+    tools.register(WriteFile())
 
     context_builder = ContextBuilder(
-        providers=[GitProvider(), FilesystemProvider()],
+        providers=[
+            GitProvider(),
+            FilesystemProvider(),
+            PythonEnvProvider(),
+            DockerProvider(),
+            KubernetesProvider(),
+            HistoryProvider(),
+            EnvironmentProvider(),
+        ],
         timeout_ms=config.context.timeout_ms,
     )
 
