@@ -3,10 +3,10 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from agentsh.tools.protocol import ToolRegistry
-from agentsh.tools.run_command import RunCommand
 
 from agentsh.models import CommandResult
+from agentsh.tools.protocol import ToolRegistry
+from agentsh.tools.run_command import RunCommand
 
 
 @pytest.fixture
