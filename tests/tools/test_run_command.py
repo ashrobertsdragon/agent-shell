@@ -4,9 +4,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from agentsh.config import PermissionRulesConfig
 from agentsh.models import CommandResult
+from agentsh.permissions import PermissionEngine
 from agentsh.tools.protocol import ToolRegistry
-from agentsh.tools.run_command import RunCommand
+from agentsh.tools.run_command import PermissionDeniedError, RunCommand
 
 
 @pytest.fixture
@@ -27,6 +29,15 @@ async def test_run_command_invokes_shell(mock_shell: AsyncMock) -> None:
     result = await tool.invoke(command="echo hello")
     mock_shell.execute.assert_called_once_with("echo hello")
     assert result.stdout == "hello\n"
+
+
+async def test_run_command_deny_raises(mock_shell: AsyncMock) -> None:
+    """A DENY-matched command raises PermissionDeniedError."""
+    rules = PermissionRulesConfig(deny=("RunCommand:rm*",))
+    permissions = PermissionEngine(rules)
+    tool = RunCommand(shell=mock_shell, permissions=permissions)
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke(command="rm -rf /")
 
 
 def test_tool_registry_get() -> None:

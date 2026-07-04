@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from agentsh.models import Message
 from agentsh.shell.protocol import Shell
 from agentsh.tools.protocol import ToolRegistry
+
+if TYPE_CHECKING:
+    from agentsh.permissions import PermissionEngine
+    from agentsh.repl import UI
 
 
 @dataclass
@@ -22,4 +27,6 @@ class App:
 
     shell: Shell
     tools: ToolRegistry
+    permissions: PermissionEngine
     state: AppState
+    ui: UI | None = None
