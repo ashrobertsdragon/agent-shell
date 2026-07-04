@@ -46,6 +46,8 @@ class UI:
 
 async def run_repl(app: App) -> None:
     """Run the main REPL loop until EOF or KeyboardInterrupt."""
+    from agentsh.agent_loop import run_agent_loop
+    from agentsh.classifier import InputKind, classify
     from agentsh.permissions import PermissionLevel
     from agentsh.tools.run_command import PermissionDeniedError
 
@@ -71,20 +73,36 @@ async def run_repl(app: App) -> None:
             continue
 
         await app.shell.append_history(raw)
+        kind = classify(raw, app.shell)
 
-        try:
-            run_cmd = app.tools.get("RunCommand")
-            key = f"RunCommand:{raw}"
-            level = app.permissions.evaluate(key)
-            if level == PermissionLevel.DENY:
-                print(f"[agentsh] denied: {raw}", file=sys.stderr)
-                continue
-            if level == PermissionLevel.CONFIRM and not await ui.confirm(
-                "RunCommand", {"command": raw}
-            ):
-                print("[agentsh] cancelled.", file=sys.stderr)
-                continue
-            result = await run_cmd.invoke(command=raw)
-            ui.render(result)
-        except PermissionDeniedError as e:
-            print(f"[agentsh] {e}", file=sys.stderr)
+        match kind:
+            case InputKind.SHELL_PARSEABLE:
+                key = f"RunCommand:{raw}"
+                level = app.permissions.evaluate(key)
+                if level == PermissionLevel.DENY:
+                    print(f"[agentsh] denied: {raw}", file=sys.stderr)
+                    continue
+                if level == PermissionLevel.CONFIRM and not await ui.confirm(
+                    "RunCommand", {"command": raw}
+                ):
+                    print("[agentsh] cancelled.", file=sys.stderr)
+                    continue
+                try:
+                    result = await app.tools.get("RunCommand").invoke(command=raw)
+                    ui.render(result)
+                except PermissionDeniedError as e:
+                    print(f"[agentsh] {e}", file=sys.stderr)
+
+            case InputKind.AGENT:
+                query = raw.removeprefix("/agent ").strip()
+                context = await app.context_builder.build(app.shell)
+                app.state.conversation.append(Message(role="user", content=query))
+                final = await run_agent_loop(
+                    agent=app.agent_router.current(),
+                    conversation=app.state.conversation,
+                    context=context,
+                    tools=app.tools,
+                    permissions=app.permissions,
+                    ui=ui,
+                )
+                ui.render(final)
