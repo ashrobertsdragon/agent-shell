@@ -16,6 +16,7 @@ from agentsh.context.providers.git import GitProvider
 from agentsh.context.providers.history import HistoryProvider
 from agentsh.context.providers.kubernetes import KubernetesProvider
 from agentsh.context.providers.python_env import PythonEnvProvider
+from agentsh.events import EventBus
 from agentsh.permissions import PermissionEngine
 from agentsh.repl import run_repl
 from agentsh.shell.bash import BashShell
@@ -62,6 +63,7 @@ def _build_app() -> App:
         context_builder=context_builder,
         agent_router=agent_router,
         state=AppState(),
+        event_bus=EventBus(),
     )
 
 

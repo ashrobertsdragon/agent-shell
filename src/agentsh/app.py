@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from agentsh.events import EventBus
 from agentsh.models import Message
 from agentsh.shell.protocol import Shell
 from agentsh.tools.protocol import ToolRegistry
@@ -33,4 +34,5 @@ class App:
     context_builder: ContextBuilder
     agent_router: AgentRouter
     state: AppState
+    event_bus: EventBus = field(default_factory=EventBus)
     ui: UI | None = None

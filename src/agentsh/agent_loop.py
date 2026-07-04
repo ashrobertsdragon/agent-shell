@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from agentsh.events import AgentResponded, EventBus, ToolDenied, ToolInvoked
 from agentsh.models import Message, ToolCall, ToolResult
 from agentsh.permissions import PermissionLevel
 from agentsh.tools.run_command import PermissionDeniedError
@@ -33,15 +34,25 @@ async def run_agent_loop(
     tools: ToolRegistry,
     permissions: PermissionEngine,
     ui: UI,
+    event_bus: EventBus | None = None,
 ) -> Message:
     """Run the agent until it produces a final response with no tool calls.
 
     CONFIRM-level tool calls prompt the user; if denied, an error ToolResult
     is injected so the agent can recover gracefully.
     """
+    bus = event_bus or EventBus()
+
     while True:
         response = await agent.respond(conversation, context, tools.schemas())
         conversation.append(response)
+
+        await bus.publish(
+            AgentResponded(
+                content=response.content,
+                tool_call_count=len(response.tool_calls),
+            )
+        )
 
         if not response.tool_calls:
             return response
@@ -53,6 +64,7 @@ async def run_agent_loop(
 
             match level:
                 case PermissionLevel.DENY:
+                    await bus.publish(ToolDenied(tool_name=tc.tool_name, key=key))
                     tool_results.append(
                         ToolResult(
                             call_id=tc.call_id,
@@ -63,6 +75,7 @@ async def run_agent_loop(
                     continue
                 case PermissionLevel.CONFIRM:
                     if not await ui.confirm(tc.tool_name, tc.arguments):
+                        await bus.publish(ToolDenied(tool_name=tc.tool_name, key=key))
                         tool_results.append(
                             ToolResult(
                                 call_id=tc.call_id,
@@ -84,14 +97,39 @@ async def run_agent_loop(
                     if hasattr(result, "stdout")
                     else str(result)
                 )
+                await bus.publish(
+                    ToolInvoked(
+                        tool_name=tc.tool_name,
+                        arguments=dict(tc.arguments),
+                        success=True,
+                    )
+                )
                 tool_results.append(ToolResult(call_id=tc.call_id, content=content))
             except PermissionDeniedError as e:
+                await bus.publish(
+                    ToolInvoked(
+                        tool_name=tc.tool_name,
+                        arguments=dict(tc.arguments),
+                        success=False,
+                    )
+                )
                 tool_results.append(
                     ToolResult(call_id=tc.call_id, content=str(e), is_error=True)
                 )
             except Exception as e:
+                await bus.publish(
+                    ToolInvoked(
+                        tool_name=tc.tool_name,
+                        arguments=dict(tc.arguments),
+                        success=False,
+                    )
+                )
                 tool_results.append(
-                    ToolResult(call_id=tc.call_id, content=f"Error: {e}", is_error=True)
+                    ToolResult(
+                        call_id=tc.call_id,
+                        content=f"Error: {e}",
+                        is_error=True,
+                    )
                 )
 
         conversation.append(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 
@@ -19,11 +21,7 @@ class PythonEnvProvider:
 
         python_version = version_result.stdout.strip().removeprefix("Python ")
         cwd = await shell.cwd()
-
-        venv_result = await shell.execute(
-            f"[ -f {cwd}/.venv/bin/python ] && echo venv || echo none"
-        )
-        has_venv = venv_result.stdout.strip() == "venv"
+        has_venv = (Path(cwd) / ".venv" / "bin" / "python").is_file()
 
         return ContextFragment(
             provider=self.name,

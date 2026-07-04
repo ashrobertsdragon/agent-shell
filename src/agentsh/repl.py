@@ -46,8 +46,11 @@ class UI:
 
 async def run_repl(app: App) -> None:
     """Run the main REPL loop until EOF or KeyboardInterrupt."""
+    import time
+
     from agentsh.agent_loop import run_agent_loop
     from agentsh.classifier import InputKind, classify
+    from agentsh.events import CommandFinished, CommandStarted, ContextCollected
     from agentsh.permissions import PermissionLevel
     from agentsh.tools.run_command import PermissionDeniedError
 
@@ -58,6 +61,7 @@ async def run_repl(app: App) -> None:
     )
     ui = UI(session)
     app.ui = ui
+    bus = app.event_bus
 
     while True:
         try:
@@ -88,7 +92,17 @@ async def run_repl(app: App) -> None:
                     print("[agentsh] cancelled.", file=sys.stderr)
                     continue
                 try:
+                    await bus.publish(CommandStarted(command=raw))
+                    t0 = time.monotonic()
                     result = await app.tools.get("RunCommand").invoke(command=raw)
+                    duration_ms = (time.monotonic() - t0) * 1000
+                    await bus.publish(
+                        CommandFinished(
+                            command=raw,
+                            exit_code=result.exit_code,
+                            duration_ms=duration_ms,
+                        )
+                    )
                     ui.render(result)
                 except PermissionDeniedError as e:
                     print(f"[agentsh] {e}", file=sys.stderr)
@@ -96,6 +110,12 @@ async def run_repl(app: App) -> None:
             case InputKind.AGENT:
                 query = raw.removeprefix("/agent ").strip()
                 context = await app.context_builder.build(app.shell)
+                await bus.publish(
+                    ContextCollected(
+                        provider_count=len(app.context_builder._providers),
+                        fragment_count=len(context),
+                    )
+                )
                 app.state.conversation.append(Message(role="user", content=query))
                 final = await run_agent_loop(
                     agent=app.agent_router.current(),
@@ -104,5 +124,6 @@ async def run_repl(app: App) -> None:
                     tools=app.tools,
                     permissions=app.permissions,
                     ui=ui,
+                    event_bus=bus,
                 )
                 ui.render(final)
