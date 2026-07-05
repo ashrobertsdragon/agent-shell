@@ -1,12 +1,14 @@
 """EventBus and core event types for cross-cutting observability."""
 
-from __future__ import annotations
-
 import inspect
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TypeVar, cast
+
+from agentsh.models import JsonValue
+
+E = TypeVar("E")
 
 
 class EventBus:
@@ -14,14 +16,20 @@ class EventBus:
 
     def __init__(self) -> None:
         """Initialize with an empty subscriber registry."""
-        self._subscribers: dict[type, list[Callable[..., Any]]] = defaultdict(list)
+        self._subscribers: dict[
+            type[object], list[Callable[[object], object]]
+        ] = defaultdict(list)
 
-    def subscribe(self, event_type: type, handler: Callable[..., Any]) -> None:
-        """Register handler to be called for every published event of event_type."""
-        self._subscribers[event_type].append(handler)
+    def subscribe(
+        self, event_type: type[E], handler: Callable[[E], object]
+    ) -> None:
+        """Register handler to be called for published event of event_type."""
+        self._subscribers[event_type].append(
+            cast(Callable[[object], object], handler)
+        )
 
-    async def publish(self, event: Any) -> None:
-        """Deliver event to all registered subscribers; swallow handler errors."""
+    async def publish(self, event: object) -> None:
+        """Deliver event to all subscribers; swallow handler errors."""
         for handler in self._subscribers[type(event)]:
             try:
                 result = handler(event)
@@ -53,7 +61,7 @@ class ToolInvoked:
     """Published after a tool call completes (success or error)."""
 
     tool_name: str
-    arguments: dict[str, Any] = field(default_factory=dict)
+    arguments: Mapping[str, JsonValue] = field(default_factory=dict)
     success: bool = True
 
 

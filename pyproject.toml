@@ -3,37 +3,65 @@ name = "agentsh"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-  "anthropic>=0.40",
-  "openai>=1.50",
   "prompt-toolkit>=3.0",
 ]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.116"]
+google = ["google-genai>=2.10"]
+openai = ["openai>=2.44"]
+openrouter = ["openai>=2.44"]
 
 [project.scripts]
 agentsh = "agentsh.main:main"
 
 [dependency-groups]
 dev = [
-  "mypy>=1.13",
-  "pytest>=8",
-  "pytest-asyncio>=0.24",
-  "ruff>=0.9",
+  "mypy>=2.1",
+  "pytest>=9",
+  "pytest-asyncio>=1.1",
+  "ruff>=0.15",
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/agentsh"]
+requires = ["uv_build>=0.9.5,<=1.0.0"]
+build-backend = "uv_build"
 
 [tool.mypy]
-strict = true
+mypy_path = "$MYPY_CONFIG_FILE_DIR/src"
 files = ["src", "tests"]
+python_version = "3.12"
+follow_imports = "silent"
+check_untyped_defs = true
+explicit_package_bases = true
+warn_return_any = true
+disallow_any_explicit = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
 
-[tool.pytest.ini_options]
+
+[tool.pytest]
+addopts = ["-rf"]
+minversion = "9.0"
 pythonpath = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
+[tool.ruff]
+line-length = 80
+target-version = "py312"
+
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["A002", "ANN003", "ANN204", "ANN401", "D100", "D417"]
+select = ["A", "ANN", "D", "E", "F", "I", "N", "UP", "W"]
+
+[tool.ruff.lint.flake8-annotations]
+mypy-init-return = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+ignore-decorators = ["typing.overload"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["D104", "E402"]
+"**/{tests,docs}/*" = ["ANN001", "ANN201", "D", "E402", "E501", "I001"]

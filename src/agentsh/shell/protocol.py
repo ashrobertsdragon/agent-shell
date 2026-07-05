@@ -1,7 +1,5 @@
 """Shell protocol definition."""
 
-from __future__ import annotations
-
 from typing import Protocol, runtime_checkable
 
 from agentsh.models import CommandResult
@@ -15,7 +13,8 @@ class Shell(Protocol):
         """Execute a command and return its result."""
         ...
 
-    async def cwd(self) -> str:
+    @property
+    def cwd(self) -> str:
         """Return the current working directory."""
         ...
 
@@ -31,7 +30,7 @@ class Shell(Protocol):
         """Return completions for a partial command string."""
         ...
 
-    def can_parse(self, raw: str) -> bool:
+    async def can_parse(self, raw: str) -> bool:
         """Return True if raw is valid shell syntax."""
         ...
 

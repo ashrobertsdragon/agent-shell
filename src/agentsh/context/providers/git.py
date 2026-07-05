@@ -1,7 +1,5 @@
 """Git context provider — reports current branch and working-tree status."""
 
-from __future__ import annotations
-
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 

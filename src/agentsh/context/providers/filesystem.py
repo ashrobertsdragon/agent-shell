@@ -1,7 +1,5 @@
 """Filesystem context provider — reports cwd contents."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from agentsh.models import ContextFragment
@@ -17,10 +15,15 @@ class FilesystemProvider:
 
     async def collect(self, shell: Shell) -> ContextFragment | None:
         """Return the top-level file listing of the current directory."""
-        cwd = await shell.cwd()
+        cwd = shell.cwd
         try:
-            entries = sorted(Path(cwd).iterdir(), key=lambda p: (p.is_file(), p.name))
-            files = [p.name + ("/" if p.is_dir() else "") for p in entries[:_MAX_FILES]]
+            entries = sorted(
+                Path(cwd).iterdir(), key=lambda p: (p.is_file(), p.name)
+            )
+            files = [
+                p.name + ("/" if p.is_dir() else "")
+                for p in entries[:_MAX_FILES]
+            ]
         except OSError:
             return None
 

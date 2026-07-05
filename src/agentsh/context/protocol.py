@@ -1,7 +1,5 @@
 """ContextProvider protocol definition."""
 
-from __future__ import annotations
-
 from typing import Protocol
 
 from agentsh.models import ContextFragment
@@ -14,5 +12,5 @@ class ContextProvider(Protocol):
     name: str
 
     async def collect(self, shell: Shell) -> ContextFragment | None:
-        """Return a fragment, or None if not applicable in the current environment."""
+        """Return a fragment or None if not applicable."""
         ...

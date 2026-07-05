@@ -1,8 +1,9 @@
 """Table-driven tests for the input classifier."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from agentsh.classifier import InputKind, classify
 
 
@@ -10,8 +11,10 @@ from agentsh.classifier import InputKind, classify
 def shell() -> MagicMock:
     """Shell mock that parses common shell commands."""
     s = MagicMock()
-    s.can_parse = MagicMock(
-        side_effect=lambda raw: raw.startswith(("ls", "cd", "echo", "git", "pwd"))
+    s.can_parse = AsyncMock(
+        side_effect=lambda raw: raw.startswith(
+            ("ls", "cd", "echo", "git", "pwd")
+        )
     )
     return s
 
@@ -20,13 +23,15 @@ def shell() -> MagicMock:
     "raw,expected",
     [
         ("/agent tell me a joke", InputKind.AGENT),
-        ("ls -la", InputKind.SHELL_PARSEABLE),
-        ("echo hello world", InputKind.SHELL_PARSEABLE),
+        ("ls -la", InputKind.SHELL),
+        ("echo hello world", InputKind.SHELL),
         ("show me all python files", InputKind.AGENT),
         ("what does this repo do", InputKind.AGENT),
         ("/agent ", InputKind.AGENT),
     ],
 )
-def test_classify(raw: str, expected: InputKind, shell: MagicMock) -> None:
+async def test_classify(
+    raw: str, expected: InputKind, shell: MagicMock
+) -> None:
     """classify routes correctly based on prefix and shell parse result."""
-    assert classify(raw, shell) == expected
+    assert await classify(raw, shell) == expected

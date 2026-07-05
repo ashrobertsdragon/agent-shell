@@ -1,7 +1,5 @@
 """Integration tests for BashShell against a real bash subprocess."""
 
-from __future__ import annotations
-
 import os
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -9,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from agentsh.shell.bash import BashShell
+from agentsh.shell.plugin.bash import BashShell
 
 
 @pytest.fixture
@@ -45,18 +43,18 @@ async def test_execute_tracks_cwd(shell: BashShell) -> None:
     await shell.execute("cd /tmp")
     result = await shell.execute("pwd")
     assert result.stdout.strip() == "/tmp"
-    cwd = await shell.cwd()
+    cwd = shell.cwd
     assert cwd == "/tmp"
 
 
 async def test_can_parse_valid(shell: BashShell) -> None:
     """can_parse returns True for valid shell syntax."""
-    assert shell.can_parse("ls -la") is True
+    assert await shell.can_parse("ls -la") is True
 
 
 async def test_can_parse_invalid(shell: BashShell) -> None:
     """can_parse returns False for invalid shell syntax."""
-    assert shell.can_parse(")(invalid((") is False
+    assert await shell.can_parse(")(invalid((") is False
 
 
 async def test_render_prompt_returns_nonempty(shell: BashShell) -> None:

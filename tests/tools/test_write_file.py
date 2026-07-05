@@ -19,7 +19,9 @@ async def test_patch_replaces_block(tmp_path: Path) -> None:
     f = tmp_path / "code.py"
     f.write_text("def foo():\n    return 1\n")
     tool = WriteFile()
-    patch = "<<<<<<< SEARCH\n    return 1\n=======\n    return 42\n>>>>>>> REPLACE"
+    patch = (
+        "<<<<<<< SEARCH\n    return 1\n=======\n    return 42\n>>>>>>> REPLACE"
+    )
     await tool.invoke(path=str(f), patch=patch)
     assert "return 42" in f.read_text()
 

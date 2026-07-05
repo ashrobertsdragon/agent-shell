@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
 
 from agentsh.app import App
-from agentsh.models import CommandResult, Message
+from agentsh.models import CommandResult, JsonValue, Message
 
 
 class UI:
-    """Handles user-facing I/O: prompting, rendering results, and confirmations."""
+    """Handles user-facing I/O: prompts, rendering, and confirmations."""
 
     def __init__(self, session: PromptSession[str]) -> None:
         """Bind to an existing prompt_toolkit session."""
@@ -33,7 +34,9 @@ class UI:
                 if result.content:
                     print(result.content)
 
-    async def confirm(self, tool_name: str, arguments: dict[str, Any]) -> bool:
+    async def confirm(
+        self, tool_name: str, arguments: Mapping[str, JsonValue]
+    ) -> bool:
         """Prompt the user to allow or deny a CONFIRM-level tool call."""
         label = arguments.get("command") or arguments.get("path") or tool_name
         print(f"\n[agentsh] permission required — {tool_name}: {label}")
@@ -48,7 +51,7 @@ async def run_repl(app: App) -> None:
     """Run the main REPL loop until EOF or KeyboardInterrupt."""
     import time
 
-    from agentsh.agent_loop import run_agent_loop
+    from agentsh.agent_loop import AgentLoopLimitError, run_agent_loop
     from agentsh.classifier import InputKind, classify
     from agentsh.events import CommandFinished, CommandStarted, ContextCollected
     from agentsh.permissions import PermissionLevel
@@ -77,10 +80,10 @@ async def run_repl(app: App) -> None:
             continue
 
         await app.shell.append_history(raw)
-        kind = classify(raw, app.shell)
+        kind = await classify(raw, app.shell)
 
         match kind:
-            case InputKind.SHELL_PARSEABLE:
+            case InputKind.SHELL:
                 key = f"RunCommand:{raw}"
                 level = app.permissions.evaluate(key)
                 if level == PermissionLevel.DENY:
@@ -94,7 +97,10 @@ async def run_repl(app: App) -> None:
                 try:
                     await bus.publish(CommandStarted(command=raw))
                     t0 = time.monotonic()
-                    result = await app.tools.get("RunCommand").invoke(command=raw)
+                    result = cast(
+                        CommandResult,
+                        await app.tools.get("RunCommand").invoke(command=raw),
+                    )
                     duration_ms = (time.monotonic() - t0) * 1000
                     await bus.publish(
                         CommandFinished(
@@ -112,18 +118,25 @@ async def run_repl(app: App) -> None:
                 context = await app.context_builder.build(app.shell)
                 await bus.publish(
                     ContextCollected(
-                        provider_count=len(app.context_builder._providers),
+                        provider_count=app.context_builder.provider_count,
                         fragment_count=len(context),
                     )
                 )
-                app.state.conversation.append(Message(role="user", content=query))
-                final = await run_agent_loop(
-                    agent=app.agent_router.current(),
-                    conversation=app.state.conversation,
-                    context=context,
-                    tools=app.tools,
-                    permissions=app.permissions,
-                    ui=ui,
-                    event_bus=bus,
+                app.state.conversation.append(
+                    Message(role="user", content=query)
                 )
-                ui.render(final)
+                try:
+                    final = await run_agent_loop(
+                        agent=app.agent,
+                        conversation=app.state.conversation,
+                        context=context,
+                        tools=app.tools,
+                        permissions=app.permissions,
+                        ui=ui,
+                        event_bus=bus,
+                    )
+                    ui.render(final)
+                except AgentLoopLimitError as e:
+                    print(f"[agentsh] {e}", file=sys.stderr)
+                finally:
+                    app.state.prune()

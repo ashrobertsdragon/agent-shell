@@ -10,9 +10,9 @@ from agentsh.permissions import PermissionEngine, PermissionLevel
 def engine() -> PermissionEngine:
     """Permission engine with representative allow/confirm/deny rules."""
     rules = PermissionRulesConfig(
-        allow=("RunCommand:ls*", "RunCommand:pwd", "ReadFile"),
-        confirm=("RunCommand:git commit*", "WriteFile"),
-        deny=("RunCommand:rm -rf*",),
+        allow={"RunCommand:ls*", "RunCommand:pwd", "ReadFile:*"},
+        confirm={"RunCommand:git commit*", "WriteFile:*"},
+        deny={"RunCommand:rm -rf*"},
     )
     return PermissionEngine(rules)
 
@@ -22,7 +22,10 @@ def test_allow(engine: PermissionEngine) -> None:
 
 
 def test_confirm(engine: PermissionEngine) -> None:
-    assert engine.evaluate("RunCommand:git commit -m 'x'") == PermissionLevel.CONFIRM
+    assert (
+        engine.evaluate("RunCommand:git commit -m 'x'")
+        == PermissionLevel.CONFIRM
+    )
 
 
 def test_deny(engine: PermissionEngine) -> None:
@@ -32,8 +35,8 @@ def test_deny(engine: PermissionEngine) -> None:
 def test_deny_beats_allow() -> None:
     """A deny pattern wins even when an allow pattern also matches."""
     rules = PermissionRulesConfig(
-        allow=("RunCommand:rm*",),
-        deny=("RunCommand:rm -rf*",),
+        allow={"RunCommand:rm*"},
+        deny={"RunCommand:rm -rf*"},
     )
     engine = PermissionEngine(rules)
     assert engine.evaluate("RunCommand:rm -rf /tmp/x") == PermissionLevel.DENY
@@ -45,7 +48,7 @@ def test_default_is_confirm(engine: PermissionEngine) -> None:
 
 
 def test_read_file_allow(engine: PermissionEngine) -> None:
-    assert engine.evaluate("ReadFile") == PermissionLevel.ALLOW
+    assert engine.evaluate("ReadFile:file") == PermissionLevel.ALLOW
 
 
 def test_write_file_confirm(engine: PermissionEngine) -> None:

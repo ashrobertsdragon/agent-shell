@@ -1,9 +1,17 @@
 """Core data models shared across all agentsh layers."""
 
-from __future__ import annotations
-
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+
+type JsonValue = (
+    Mapping[str, "JsonValue"]
+    | Sequence["JsonValue"]
+    | str
+    | int
+    | float
+    | bool
+    | None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +30,7 @@ class ToolCall:
     """A request from the LLM to invoke a tool."""
 
     tool_name: str
-    arguments: dict[str, Any]
+    arguments: Mapping[str, JsonValue]
     call_id: str
 
 
@@ -51,4 +59,4 @@ class ContextFragment:
 
     provider: str
     summary: str
-    payload: dict[str, Any]
+    payload: Mapping[str, JsonValue]

@@ -1,10 +1,11 @@
 """WriteFile tool — writes or patches a file on the filesystem."""
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
-from typing import Any
+from typing import cast
+
+from agentsh.models import JsonValue
+from agentsh.tools import SchemaDict
 
 _BLOCK_RE = re.compile(
     r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE",
@@ -33,7 +34,7 @@ class WriteFile:
         "Write content to a file (full overwrite), or apply targeted"
         " SEARCH/REPLACE edits using the patch parameter."
     )
-    schema: dict[str, Any] = {
+    schema: SchemaDict = {
         "name": "WriteFile",
         "description": (
             "Write content to a file (full overwrite), or apply targeted"
@@ -57,7 +58,11 @@ class WriteFile:
                     "type": "string",
                     "description": (
                         "One or more SEARCH/REPLACE blocks. Format: "
-                        "<<<<<<< SEARCH\\n<old>\\n=======\\n<new>\\n>>>>>>> REPLACE"
+                        "<<<<<<< SEARCH\\n"
+                        "<old>\\n"
+                        "=======\\n"
+                        "<new>\\n"
+                        ">>>>>>> REPLACE"
                     ),
                 },
             },
@@ -65,11 +70,11 @@ class WriteFile:
         },
     }
 
-    async def invoke(self, **kwargs: Any) -> str:
+    async def invoke(self, **kwargs: JsonValue) -> str:
         """Write or patch the file; returns a confirmation string."""
-        path = Path(kwargs["path"])
-        content: str | None = kwargs.get("content")
-        patch: str | None = kwargs.get("patch")
+        path = Path(str(kwargs["path"]))
+        content: str | None = cast(str | None, kwargs.get("content"))
+        patch: str | None = cast(str | None, kwargs.get("patch"))
 
         if patch is None and content is None:
             raise ValueError("WriteFile requires either content or patch.")

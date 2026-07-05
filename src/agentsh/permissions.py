@@ -1,6 +1,4 @@
-"""Permission engine — evaluates tool call keys against allow/confirm/deny rules."""
-
-from __future__ import annotations
+"""Permission engine — evaluates tool calls against allow/confirm/deny rules."""
 
 from enum import Enum, auto
 from fnmatch import fnmatch

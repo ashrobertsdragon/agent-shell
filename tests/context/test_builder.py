@@ -1,7 +1,5 @@
 """Tests for ContextBuilder timeout and failure isolation."""
 
-from __future__ import annotations
-
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 

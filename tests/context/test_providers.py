@@ -1,18 +1,18 @@
 """Tests for context providers."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agentsh.context.providers.docker import DockerProvider
-from agentsh.context.providers.environment import EnvironmentProvider
-from agentsh.context.providers.filesystem import FilesystemProvider
-from agentsh.context.providers.git import GitProvider
-from agentsh.context.providers.history import HistoryProvider
-from agentsh.context.providers.python_env import PythonEnvProvider
+from agentsh.context.providers import (
+    DockerProvider,
+    EnvironmentProvider,
+    FilesystemProvider,
+    GitProvider,
+    HistoryProvider,
+    PythonProvider,
+)
 from agentsh.models import CommandResult
 
 
@@ -22,12 +22,18 @@ def shell() -> MagicMock:
     return MagicMock()
 
 
-async def test_git_provider_returns_fragment_in_git_repo(shell: MagicMock) -> None:
+async def test_git_provider_returns_fragment_in_git_repo(
+    shell: MagicMock,
+) -> None:
     """GitProvider returns a fragment when inside a git repo."""
     shell.execute = AsyncMock(
         side_effect=[
             CommandResult(
-                stdout="main\n", stderr="", exit_code=0, duration_ms=1, cwd="/repo"
+                stdout="main\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd="/repo",
             ),
             CommandResult(
                 stdout=" M file.py\n",
@@ -64,12 +70,14 @@ async def test_filesystem_provider_returns_fragment(
     shell: MagicMock, tmp_path: Path
 ) -> None:
     """FilesystemProvider returns a fragment listing the cwd."""
-    shell.cwd = AsyncMock(return_value=str(tmp_path))
+    shell.cwd = str(tmp_path)
     (tmp_path / "main.py").touch()
     provider = FilesystemProvider()
     result = await provider.collect(shell)
     assert result is not None
-    assert "main.py" in result.payload.get("files", [])
+    files = result.payload.get("files", [])
+    assert isinstance(files, list)
+    assert "main.py" in files
 
 
 async def test_python_env_provider(shell: MagicMock) -> None:
@@ -92,14 +100,16 @@ async def test_python_env_provider(shell: MagicMock) -> None:
             ),
         ]
     )
-    shell.cwd = AsyncMock(return_value="/repo")
-    provider = PythonEnvProvider()
+    shell.cwd = "/repo"
+    provider = PythonProvider()
     result = await provider.collect(shell)
     assert result is not None
     assert result.payload.get("python_version") == "3.12.0"
 
 
-async def test_docker_provider_returns_none_without_docker(shell: MagicMock) -> None:
+async def test_docker_provider_returns_none_without_docker(
+    shell: MagicMock,
+) -> None:
     """DockerProvider returns None when docker is unavailable."""
     shell.execute = AsyncMock(
         return_value=CommandResult(
@@ -138,6 +148,7 @@ async def test_environment_provider(shell: MagicMock) -> None:
     result = await provider.collect(shell)
     assert result is not None
     env = result.payload["env"]
+    assert isinstance(env, dict)
     assert "HOME" in env
     assert "PATH" in env
     assert "ANTHROPIC_API_KEY" not in env

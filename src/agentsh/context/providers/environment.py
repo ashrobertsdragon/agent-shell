@@ -1,7 +1,5 @@
 """Environment context provider — reports safe environment variables."""
 
-from __future__ import annotations
-
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 

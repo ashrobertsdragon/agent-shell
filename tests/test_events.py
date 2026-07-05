@@ -1,7 +1,5 @@
 """Tests for EventBus publish/subscribe ordering and subscriber isolation."""
 
-from __future__ import annotations
-
 import asyncio
 
 from agentsh.events import CommandFinished, EventBus, ToolDenied
@@ -23,7 +21,9 @@ async def test_multiple_subscribers_all_called() -> None:
     log: list[str] = []
     bus.subscribe(CommandFinished, lambda e: log.append("first"))
     bus.subscribe(CommandFinished, lambda e: log.append("second"))
-    await bus.publish(CommandFinished(command="pwd", exit_code=0, duration_ms=0.5))
+    await bus.publish(
+        CommandFinished(command="pwd", exit_code=0, duration_ms=0.5)
+    )
     assert log == ["first", "second"]
 
 
@@ -37,7 +37,9 @@ async def test_subscriber_exception_does_not_stop_others() -> None:
 
     bus.subscribe(CommandFinished, bad)
     bus.subscribe(CommandFinished, lambda e: log.append("ok"))
-    await bus.publish(CommandFinished(command="echo", exit_code=0, duration_ms=0.1))
+    await bus.publish(
+        CommandFinished(command="echo", exit_code=0, duration_ms=0.1)
+    )
     assert log == ["ok"]
 
 
@@ -47,6 +49,8 @@ def test_unrelated_event_not_delivered() -> None:
     received: list[object] = []
     bus.subscribe(CommandFinished, received.append)
     asyncio.run(
-        bus.publish(ToolDenied(tool_name="RunCommand", key="RunCommand:rm -rf /"))
+        bus.publish(
+            ToolDenied(tool_name="RunCommand", key="RunCommand:rm -rf /")
+        )
     )
     assert received == []

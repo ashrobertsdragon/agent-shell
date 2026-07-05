@@ -17,7 +17,11 @@ def mock_shell() -> AsyncMock:
     shell = AsyncMock()
     shell.execute = AsyncMock(
         return_value=CommandResult(
-            stdout="hello\n", stderr="", exit_code=0, duration_ms=5.0, cwd="/tmp"
+            stdout="hello\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=5.0,
+            cwd="/tmp",
         )
     )
     return shell
@@ -33,7 +37,7 @@ async def test_run_command_invokes_shell(mock_shell: AsyncMock) -> None:
 
 async def test_run_command_deny_raises(mock_shell: AsyncMock) -> None:
     """A DENY-matched command raises PermissionDeniedError."""
-    rules = PermissionRulesConfig(deny=("RunCommand:rm*",))
+    rules = PermissionRulesConfig(deny={"RunCommand:rm*"})
     permissions = PermissionEngine(rules)
     tool = RunCommand(shell=mock_shell, permissions=permissions)
     with pytest.raises(PermissionDeniedError):

@@ -1,35 +1,36 @@
 """Anthropic Claude backend."""
 
-from __future__ import annotations
-
 import json
-from typing import Any, cast
+from typing import cast
 
 import anthropic
-
-from agentsh.config import AgentBackendConfig
-from agentsh.models import ContextFragment, Message, ToolCall
-
-_SYSTEM_PREFIX = (
-    "You are an AI assistant integrated into the user's shell. "
-    "Use the provided tools to help with tasks. "
-    "Be concise — you are running inside a terminal."
+from anthropic.types import (
+    MessageParam,
+    TextBlockParam,
+    ToolParam,
+    ToolUseBlockParam,
 )
+
+from agentsh.agent import SYSTEM_PREFIX, Agent
+from agentsh.config import AgentConfig
+from agentsh.models import ContextFragment, Message, ToolCall
+from agentsh.tools import SchemaDict
 
 
 def _build_system(context: list[ContextFragment]) -> str:
     """Combine the base system prompt with serialized context fragments."""
-    parts = [_SYSTEM_PREFIX]
+    parts = [SYSTEM_PREFIX]
     for frag in context:
         parts.append(
-            f"\n## {frag.summary}\n```json\n{json.dumps(frag.payload, indent=2)}\n```"
+            f"\n## {frag.summary}\n"
+            f"```json\n{json.dumps(frag.payload, indent=2)}\n```"
         )
     return "\n".join(parts)
 
 
-def _message_to_anthropic(m: Message) -> dict[str, Any]:
+def _message_to_anthropic(m: Message) -> MessageParam:
     """Convert a canonical Message to Anthropic's message format."""
-    if m.tool_results:
+    if not m.tool_results:
         return {
             "role": "user",
             "content": [
@@ -43,7 +44,7 @@ def _message_to_anthropic(m: Message) -> dict[str, Any]:
             ],
         }
 
-    content: list[dict[str, Any]] = []
+    content: list[ToolUseBlockParam | TextBlockParam] = []
     if m.content:
         content.append({"type": "text", "text": m.content})
     for tc in m.tool_calls:
@@ -52,19 +53,19 @@ def _message_to_anthropic(m: Message) -> dict[str, Any]:
                 "type": "tool_use",
                 "id": tc.call_id,
                 "name": tc.tool_name,
-                "input": tc.arguments,
+                "input": cast(dict[str, object], tc.arguments),
             }
         )
 
     if len(content) == 1 and content[0]["type"] == "text":
-        return {"role": m.role, "content": m.content}
-    return {"role": m.role, "content": content}
+        return {"role": m.role, "content": m.content}  # type: ignore[typeddict-item]
+    return {"role": m.role, "content": content}  # type: ignore[typeddict-item]
 
 
-class AnthropicAgent:
+class AnthropicAgent(Agent):
     """LLM backend using the Anthropic Messages API."""
 
-    def __init__(self, config: AgentBackendConfig) -> None:
+    def __init__(self, config: AgentConfig) -> None:
         """Initialise the async Anthropic client."""
         self._config = config
         self._client = anthropic.AsyncAnthropic()
@@ -73,26 +74,27 @@ class AnthropicAgent:
         self,
         conversation: list[Message],
         context: list[ContextFragment],
-        tools: list[dict[str, Any]],
+        tools: list[SchemaDict],
     ) -> Message:
         """Call the Anthropic API and return the next assistant message."""
-        anthropic_tools = [
+        anthropic_tools: list[ToolParam] = [
             {
                 "name": t["name"],
                 "description": t["description"],
-                "input_schema": t.get(
-                    "input_schema", {"type": "object", "properties": {}}
-                ),
+                "input_schema": {
+                    "type": t.get("input_schema", {}).get("type"),
+                    "properties": t.get("input_schema", {}).get("properties"),
+                },
             }
             for t in tools
         ]
 
         response = await self._client.messages.create(
             model=self._config.model,
-            max_tokens=4096,
+            max_tokens=self._config.max_tokens,
             system=_build_system(context),
-            messages=cast(Any, [_message_to_anthropic(m) for m in conversation]),
-            tools=cast(Any, anthropic_tools),
+            messages=[_message_to_anthropic(m) for m in conversation],
+            tools=anthropic_tools,
         )
 
         tool_calls = tuple(
@@ -111,4 +113,6 @@ class AnthropicAgent:
             if block.type == "text"
         )
 
-        return Message(role="assistant", content=text_content, tool_calls=tool_calls)
+        return Message(
+            role="assistant", content=text_content, tool_calls=tool_calls
+        )

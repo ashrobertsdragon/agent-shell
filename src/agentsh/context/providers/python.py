@@ -1,17 +1,15 @@
 """Python environment context provider."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 
 
-class PythonEnvProvider:
+class PythonProvider:
     """Collects Python version and virtualenv status."""
 
-    name = "python_env"
+    name = "python"
 
     async def collect(self, shell: Shell) -> ContextFragment | None:
         """Return Python version and venv path, or None if Python is absent."""
@@ -20,7 +18,7 @@ class PythonEnvProvider:
             return None
 
         python_version = version_result.stdout.strip().removeprefix("Python ")
-        cwd = await shell.cwd()
+        cwd = shell.cwd
         has_venv = (Path(cwd) / ".venv" / "bin" / "python").is_file()
 
         return ContextFragment(

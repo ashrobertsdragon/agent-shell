@@ -1,15 +1,18 @@
 """Tests for core data models."""
 
+import dataclasses
+
+import pytest
+
 from agentsh.models import CommandResult, ContextFragment, Message, ToolResult
 
 
 def test_command_result_is_frozen() -> None:
-    r = CommandResult(stdout="hi", stderr="", exit_code=0, duration_ms=1.0, cwd="/")
-    try:
+    r = CommandResult(
+        stdout="hi", stderr="", exit_code=0, duration_ms=1.0, cwd="/"
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
         r.stdout = "x"  # type: ignore[misc]
-        raise AssertionError("should be frozen")
-    except Exception:
-        pass
 
 
 def test_message_defaults() -> None:
