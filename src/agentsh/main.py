@@ -1,16 +1,17 @@
 """CLI entry point."""
 
 import asyncio
+import sys
 
 from agentsh.agent import Agent
 from agentsh.app import App, AppState
 from agentsh.config import load_config
-from agentsh.context import providers
 from agentsh.context.builder import ContextBuilder
+from agentsh.context.providers import UnknownProviderError, build_providers
 from agentsh.events import EventBus
 from agentsh.permissions import PermissionEngine
 from agentsh.repl import run_repl
-from agentsh.shell import create_shell
+from agentsh.shell import UnsupportedShellError, create_shell
 from agentsh.tools.protocol import ToolRegistry
 from agentsh.tools.read_file import ReadFile
 from agentsh.tools.run_command import RunCommand
@@ -29,14 +30,7 @@ def _build_app() -> App:
     tools.register(WriteFile())
 
     context_builder = ContextBuilder(
-        providers=[
-            providers.GitProvider(),
-            providers.FilesystemProvider(),
-            providers.PythonProvider(),
-            providers.DockerProvider(),
-            providers.HistoryProvider(),
-            providers.EnvironmentProvider(),
-        ],
+        providers=build_providers(config.context.providers),
         timeout_ms=config.context.timeout_ms,
     )
 
@@ -55,7 +49,10 @@ def _build_app() -> App:
 
 def main() -> None:
     """Entry point for the agentsh CLI."""
-    app = _build_app()
+    try:
+        app = _build_app()
+    except (UnsupportedShellError, UnknownProviderError) as e:
+        sys.exit(f"agentsh: {e}")
     asyncio.run(run_repl(app))
 
 

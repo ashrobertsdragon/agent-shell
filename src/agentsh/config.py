@@ -21,7 +21,14 @@ class ContextConfig:
 
     timeout_ms: int = 200
     providers: list[str] = field(
-        default_factory=lambda: ["git", "filesystem", "python", "docker"]
+        default_factory=lambda: [
+            "git",
+            "filesystem",
+            "python",
+            "docker",
+            "history",
+            "environment",
+        ]
     )
 
 
@@ -63,12 +70,7 @@ def load_config(path: Path | None = None) -> Config:
     agent = AgentConfig(**agent_raw)
 
     context_raw: dict = raw.get("context", {})
-    context = ContextConfig(
-        timeout_ms=context_raw.get("timeout_ms", 200),
-        providers=context_raw.get(
-            "providers", ["git", "filesystem", "python", "docker"]
-        ),
-    )
+    context = ContextConfig(**context_raw)
 
     perm_raw = raw.get("permissions", {}).get("rules", {})
     permissions = PermissionRulesConfig(

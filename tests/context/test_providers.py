@@ -5,14 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agentsh.context.providers import (
-    DockerProvider,
-    EnvironmentProvider,
-    FilesystemProvider,
-    GitProvider,
-    HistoryProvider,
-    PythonProvider,
-)
+from agentsh.context.providers.docker import DockerProvider
+from agentsh.context.providers.environment import EnvironmentProvider
+from agentsh.context.providers.filesystem import FilesystemProvider
+from agentsh.context.providers.git import GitProvider
+from agentsh.context.providers.history import HistoryProvider
+from agentsh.context.providers.python import PythonProvider
 from agentsh.models import CommandResult
 
 
