@@ -7,11 +7,10 @@ __all__ = ["register_plugins"]
 
 
 def register_plugins() -> None:
-    """Dynamically import plugins to trigger registration."""
-    self_file = Path(__file__)
+    """Dynamically import plugin modules to trigger registration."""
+    package_dir = Path(__file__).parent
 
-    for module in self_file.parent.iterdir():
-        if module == self_file:
+    for module in package_dir.glob("*.py"):
+        if module.name.startswith("_"):
             continue
-        mod = module.stem
-        import_module(f".{mod}", package="agentsh.shell.plugin")
+        import_module(f".{module.stem}", package="agentsh.shell.plugin")
