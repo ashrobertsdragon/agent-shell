@@ -21,8 +21,10 @@ class PermissionEngine:
     narrower allow or confirm rule.
 
     The tool_call_key format is:
-      - ``"{tool_name}:{command}"`` for RunCommand
-      - ``"{tool_name}"`` for ReadFile / WriteFile
+      - ``"RunCommand:{command}"`` with the command stripped
+      - ``"ReadFile:{path}"`` / ``"WriteFile:{path}"`` with the path
+        resolved to an absolute POSIX-style form
+      - ``"{tool_name}"`` for any other tool
     """
 
     def __init__(self, rules: PermissionRulesConfig) -> None:

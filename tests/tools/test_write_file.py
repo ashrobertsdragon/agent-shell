@@ -41,3 +41,26 @@ async def test_requires_content_or_patch(tmp_path: Path) -> None:
     tool = WriteFile()
     with pytest.raises(ValueError, match="content or patch"):
         await tool.invoke(path=str(tmp_path / "x.txt"))
+
+
+async def test_write_file_expands_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Tilde paths resolve to the user's home directory."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    await WriteFile().invoke(path="~/out.txt", content="written")
+    assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "written"
+
+
+async def test_write_and_patch_preserve_non_ascii_content(
+    tmp_path: Path,
+) -> None:
+    """Non-ASCII content round-trips as UTF-8 regardless of locale."""
+    f = tmp_path / "unicode.txt"
+    await WriteFile().invoke(path=str(f), content="café ☕ emoji 🎉")
+    assert f.read_text(encoding="utf-8") == "café ☕ emoji 🎉"
+    patch = (
+        "<<<<<<< SEARCH\ncafé ☕ emoji 🎉\n=======\nnaïve 🌊\n>>>>>>> REPLACE"
+    )
+    await WriteFile().invoke(path=str(f), patch=patch)
+    assert f.read_text(encoding="utf-8") == "naïve 🌊"

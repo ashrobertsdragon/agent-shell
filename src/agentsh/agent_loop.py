@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from agentsh.events import AgentResponded, EventBus, ToolDenied, ToolInvoked
 from agentsh.models import CommandResult, Message, ToolCall, ToolResult
 from agentsh.permissions import PermissionLevel
+from agentsh.tools._paths import canonical_path
 from agentsh.tools.run_command import PermissionDeniedError
 
 if TYPE_CHECKING:
@@ -20,12 +21,19 @@ class AgentLoopLimitError(Exception):
 
 
 def _tool_call_key(tc: ToolCall) -> str:
-    """Build the permission key for a tool call."""
+    """Build the permission key for a tool call.
+
+    Path arguments are canonicalized so alternate spellings of the same
+    file (./, ../, ~, symlinks) evaluate against the same key the tool
+    will actually operate on.
+    """
     match tc.tool_name:
         case "RunCommand":
-            return f"RunCommand:{tc.arguments.get('command', '')}"
+            command = str(tc.arguments.get("command", "")).strip()
+            return f"RunCommand:{command}"
         case "ReadFile" | "WriteFile":
-            return f"{tc.tool_name}:{tc.arguments.get('path', '')}"
+            path = canonical_path(str(tc.arguments.get("path", "")))
+            return f"{tc.tool_name}:{path.as_posix()}"
         case _:
             return tc.tool_name
 

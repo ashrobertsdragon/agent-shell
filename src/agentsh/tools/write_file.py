@@ -1,11 +1,11 @@
 """WriteFile tool — writes or patches a file on the filesystem."""
 
 import re
-from pathlib import Path
 from typing import cast
 
 from agentsh.models import JsonValue
 from agentsh.tools import SchemaDict
+from agentsh.tools._paths import canonical_path
 
 _BLOCK_RE = re.compile(
     r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE",
@@ -72,7 +72,7 @@ class WriteFile:
 
     async def invoke(self, **kwargs: JsonValue) -> str:
         """Write or patch the file; returns a confirmation string."""
-        path = Path(str(kwargs["path"]))
+        path = canonical_path(str(kwargs["path"]))
         content: str | None = cast(str | None, kwargs.get("content"))
         patch: str | None = cast(str | None, kwargs.get("patch"))
 
@@ -82,9 +82,13 @@ class WriteFile:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         if patch is not None:
-            original = path.read_text(errors="replace") if path.exists() else ""
-            path.write_text(_apply_patch(original, patch))
+            original = (
+                path.read_text(encoding="utf-8", errors="replace")
+                if path.exists()
+                else ""
+            )
+            path.write_text(_apply_patch(original, patch), encoding="utf-8")
         else:
-            path.write_text(content or "")
+            path.write_text(content or "", encoding="utf-8")
 
         return f"Written: {path}"
