@@ -23,15 +23,26 @@ class AppState:
     max_history: int = 10
 
     def prune(self) -> None:
-        """Trim to the last max_history messages, starting on a user turn."""
+        """Trim old turns so the conversation fits max_history.
+
+        The cut always lands on a user message so no assistant/tool
+        message is orphaned (providers reject tool results without their
+        originating call). The most recent turn is never split, even if
+        it alone exceeds max_history.
+        """
         if len(self.conversation) <= self.max_history:
             return
-        trimmed = self.conversation[-self.max_history :]
-        for i, msg in enumerate(trimmed):
-            if msg.role == "user":
-                self.conversation = list(trimmed[i:])
-                return
-        self.conversation = list(trimmed)
+        user_indices = [
+            i for i, msg in enumerate(self.conversation) if msg.role == "user"
+        ]
+        if not user_indices:
+            return
+        cut = user_indices[-1]
+        for idx in reversed(user_indices):
+            if len(self.conversation) - idx > self.max_history:
+                break
+            cut = idx
+        self.conversation = self.conversation[cut:]
 
 
 @dataclass
