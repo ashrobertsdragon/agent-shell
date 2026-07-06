@@ -156,7 +156,10 @@ class OpenrouterAgent(Agent):
         if tool_calls_attr:
             for tc in tool_calls_attr:
                 if getattr(tc, "type", "") == "function":
-                    args = json.loads(tc.function.arguments)
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        args = {}
                     if isinstance(args, dict):
                         tool_calls.append(
                             ToolCall(

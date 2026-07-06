@@ -149,7 +149,10 @@ class OpenaiAgent(Agent):
         if choice.tool_calls:
             for tc in choice.tool_calls:
                 if tc.type == "function":
-                    args = json.loads(tc.function.arguments)
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        args = {}
                     if isinstance(args, dict):
                         tool_calls.append(
                             ToolCall(

@@ -98,3 +98,25 @@ async def test_respond_parses_tool_calls(
     assert tc.tool_name == "RunCommand"
     assert tc.arguments == {"command": "ls -la"}
     assert tc.call_id == "tu_abc"
+
+
+async def test_respond_tolerates_malformed_tool_arguments(
+    config: AgentConfig, tool_use_response: MagicMock
+) -> None:
+    """Truncated arguments JSON yields empty args instead of crashing."""
+    tool_use_response.choices[0].message.tool_calls[
+        0
+    ].function.arguments = '{"command": "ls'
+    agent = OpenaiAgent(config)
+    with patch.object(
+        agent._client.chat.completions,
+        "create",
+        new=AsyncMock(return_value=tool_use_response),
+    ):
+        result = await agent.respond(
+            conversation=[Message(role="user", content="list files")],
+            context=[],
+            tools=[],
+        )
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].arguments == {}
