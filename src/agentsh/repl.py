@@ -52,7 +52,7 @@ async def run_repl(app: App) -> None:
     import time
 
     from agentsh.agent_loop import AgentLoopLimitError, run_agent_loop
-    from agentsh.classifier import InputKind, classify
+    from agentsh.classifier import InputKind, agent_query, classify
     from agentsh.events import CommandFinished, CommandStarted, ContextCollected
     from agentsh.permissions import PermissionLevel
     from agentsh.tools.run_command import PermissionDeniedError
@@ -114,7 +114,7 @@ async def run_repl(app: App) -> None:
                     print(f"[agentsh] {e}", file=sys.stderr)
 
             case InputKind.AGENT:
-                query = raw.removeprefix("/agent ").strip()
+                query = agent_query(raw)
                 context = await app.context_builder.build(app.shell)
                 await bus.publish(
                     ContextCollected(
