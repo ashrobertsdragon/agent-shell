@@ -30,7 +30,7 @@ def _build_system(context: list[ContextFragment]) -> str:
 
 def _message_to_anthropic(m: Message) -> MessageParam:
     """Convert a canonical Message to Anthropic's message format."""
-    if not m.tool_results:
+    if m.tool_results:
         return {
             "role": "user",
             "content": [

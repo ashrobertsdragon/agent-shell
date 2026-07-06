@@ -10,7 +10,7 @@ dependencies = [
 anthropic = ["anthropic>=0.116"]
 google = ["google-genai>=2.10"]
 openai = ["openai>=2.44"]
-openrouter = ["openai>=2.44"]
+openrouter = ["openrouter>=0.11"]
 
 [project.scripts]
 agentsh = "agentsh.main:main"
