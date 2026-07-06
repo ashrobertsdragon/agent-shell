@@ -13,6 +13,8 @@ from agentsh.shell._registry import register
 
 _SENTINEL = "__AGENTSH_DONE_8675309__"
 
+_PROMPT_TIMEOUT = 2.0
+
 
 @register("bash")
 class BashShell:
@@ -93,7 +95,7 @@ class BashShell:
                 )
             except ChildProcessError:
                 stderr_content = Path(stderr_path).read_text(errors="replace")
-                duration_ms = (time.monotonic() - start) * 100
+                duration_ms = (time.monotonic() - start) * 1000
                 return CommandResult(
                     stdout="",
                     stderr=stderr_content,
@@ -159,27 +161,34 @@ class BashShell:
         bash -i sources .bashrc. ${PS1@P} expands all prompt sequences including
         command substitutions (starship, powerline, etc.).
         """
+        fallback = f"{self._cwd}$ "
         try:
             proc = await asyncio.create_subprocess_exec(
                 "bash",
                 "-i",
                 "-c",
                 f"cd {shlex.quote(self._cwd)} && printf '%s' \"${{PS1@P}}\"",
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
                 env=os.environ,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
-            prompt = (
-                stdout.decode(errors="replace")
-                .replace("\001", "")
-                .replace("\002", "")
+        except OSError:
+            return fallback
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=_PROMPT_TIMEOUT
             )
-            if prompt:
-                return prompt
-        except (TimeoutError, Exception):
-            pass
-        return f"{self._cwd}$ "
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return fallback
+        prompt = (
+            stdout.decode(errors="replace")
+            .replace("\001", "")
+            .replace("\002", "")
+        )
+        return prompt or fallback
 
     async def append_history(self, command: str) -> None:
         """Append command to $HISTFILE (default ~/.bash_history)."""

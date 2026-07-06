@@ -14,6 +14,8 @@ from agentsh.shell._registry import register
 
 _SENTINEL = "__AGENTSH_PS_DONE_8675309__"
 
+_PROMPT_TIMEOUT = 3.0
+
 _INIT = (
     "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
     "$OutputEncoding = [Text.Encoding]::UTF8; "
@@ -72,6 +74,28 @@ def _ps_quote(value: str) -> str:
     """Return value as a PowerShell single-quoted string literal."""
     escaped = value.replace("'", "''")
     return f"'{escaped}'"
+
+
+def _wrap_command(command: str, stderr_path: str) -> str:
+    """Wrap a command to capture stderr and emit the sentinel line.
+
+    The command is base64-encoded so any content is a single safe
+    statement; the stderr path is quoted as a literal so paths with
+    single quotes cannot break the wrapper syntax.
+    """
+    b64 = base64.b64encode(command.encode()).decode("ascii")
+    stderr_literal = _ps_quote(stderr_path)
+    return (
+        "$global:LASTEXITCODE = 0\n"
+        "$__cmd = [Text.Encoding]::UTF8.GetString("
+        f"[Convert]::FromBase64String('{b64}'))\n"
+        f"try {{ Invoke-Expression $__cmd 2>>{stderr_literal}; "
+        "$__ok = $? } catch { $_ | Out-String | "
+        f"Add-Content {stderr_literal}; $__ok = $false }}\n"
+        "$__ec = if ($__ok -and -not $LASTEXITCODE) { 0 } "
+        "elseif ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }\n"
+        f'"{_SENTINEL}:$__ec:$((Get-Location).Path)"\n'
+    )
 
 
 @register("powershell")
@@ -138,18 +162,7 @@ class PowerShellShell:
             os.close(fd)
 
             start = time.monotonic()
-            b64 = base64.b64encode(command.encode()).decode("ascii")
-            wrapped = (
-                "$global:LASTEXITCODE = 0\n"
-                "$__cmd = [Text.Encoding]::UTF8.GetString("
-                f"[Convert]::FromBase64String('{b64}'))\n"
-                f"try {{ Invoke-Expression $__cmd 2>>'{stderr_path}'; "
-                "$__ok = $? } catch { $_ | Out-String | "
-                f"Add-Content '{stderr_path}'; $__ok = $false }}\n"
-                "$__ec = if ($__ok -and -not $LASTEXITCODE) { 0 } "
-                "elseif ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }\n"
-                f'"{_SENTINEL}:$__ec:$((Get-Location).Path)"\n'
-            )
+            wrapped = _wrap_command(command, stderr_path)
             chunks: list[str] = []
             exit_code = 1
             try:
@@ -269,6 +282,7 @@ class PowerShellShell:
         -NoProfile is deliberately omitted so custom prompt functions
         (oh-my-posh, starship, etc.) are active.
         """
+        fallback = f"PS {self._cwd}> "
         try:
             exe = _resolve_powershell()
             proc = await asyncio.create_subprocess_exec(
@@ -276,16 +290,22 @@ class PowerShellShell:
                 "-NoLogo",
                 "-Command",
                 f"Set-Location {_ps_quote(self._cwd)}; prompt",
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3.0)
-            prompt = stdout.decode(errors="replace").strip("\r\n")
-            if prompt:
-                return prompt
-        except (TimeoutError, RuntimeError, OSError):
-            pass
-        return f"PS {self._cwd}> "
+        except (RuntimeError, OSError):
+            return fallback
+        try:
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=_PROMPT_TIMEOUT
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return fallback
+        prompt = stdout.decode(errors="replace").strip("\r\n")
+        return prompt or fallback
 
     async def append_history(self, command: str) -> None:
         """Append command to the default PSReadLine history file."""

@@ -13,6 +13,7 @@ from agentsh.shell.plugin.powershell import (
     _ps_quote,
     _psreadline_history_path,
     _resolve_powershell,
+    _wrap_command,
 )
 
 
@@ -99,6 +100,13 @@ def test_ps_quote_escapes_single_quotes() -> None:
     """Embedded single quotes are doubled inside the quoted literal."""
     assert _ps_quote("it's") == "'it''s'"
     assert _ps_quote("plain") == "'plain'"
+
+
+def test_wrap_command_quotes_stderr_path_with_single_quote() -> None:
+    """A stderr path containing a quote is embedded as a safe literal."""
+    wrapped = _wrap_command("echo hi", "/home/o'connor/stderr.txt")
+    assert "'/home/o''connor/stderr.txt'" in wrapped
+    assert _SENTINEL in wrapped
 
 
 async def test_history_round_trip(

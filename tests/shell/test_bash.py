@@ -3,11 +3,24 @@
 import os
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from agentsh.shell.plugin import bash as bash_module
 from agentsh.shell.plugin.bash import BashShell
+
+
+class _FakeClock:
+    """Stand-in for the time module yielding preset monotonic ticks."""
+
+    def __init__(self, *ticks: float) -> None:
+        self._ticks = iter(ticks)
+
+    def monotonic(self) -> float:
+        """Return the next preset tick."""
+        return next(self._ticks)
 
 
 @pytest.fixture
@@ -72,3 +85,15 @@ async def test_append_history_writes_to_histfile(
     with patch.dict(os.environ, {"HISTFILE": histfile}):
         await shell.append_history("ls -la")
     assert "ls -la" in (tmp_path / ".bash_history").read_text()
+
+
+async def test_execute_duration_unit_consistent_on_child_process_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ChildProcessError branch reports duration in milliseconds."""
+    s = BashShell()
+    s._process = SimpleNamespace(stdin=None, returncode=None)  # type: ignore[assignment]
+    monkeypatch.setattr(bash_module, "time", _FakeClock(0.0, 0.5))
+    result = await s.execute("true")
+    assert result.duration_ms == 500.0
+    assert result.exit_code == 1
