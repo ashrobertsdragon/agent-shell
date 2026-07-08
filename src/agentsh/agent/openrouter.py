@@ -15,6 +15,7 @@ from openrouter.components import (
 
 from agentsh.agent import SYSTEM_PREFIX, Agent
 from agentsh.config import AgentConfig
+from agentsh.context.sanitize import render_context_fragment
 from agentsh.models import ContextFragment, Message, ToolCall
 from agentsh.tools import SchemaDict
 
@@ -27,13 +28,9 @@ type OpenRouterMessageDict = (
 
 
 def _build_system(context: list[ContextFragment]) -> str:
-    """Combine the base system prompt with serialized context fragments."""
+    """Combine the base system prompt with sanitized context fragments."""
     parts = [SYSTEM_PREFIX]
-    for frag in context:
-        parts.append(
-            f"\n## {frag.summary}\n"
-            f"```json\n{json.dumps(frag.payload, indent=2)}\n```"
-        )
+    parts.extend(render_context_fragment(frag) for frag in context)
     return "\n".join(parts)
 
 
