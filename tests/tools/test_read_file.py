@@ -95,3 +95,18 @@ async def test_read_confirm_proceeds_when_callback_approves(
     confirm = AsyncMock(return_value=True)
     tool = ReadFile(permissions=permissions, confirm=confirm)
     assert await tool.invoke(path=str(f)) == "top secret"
+
+
+async def test_read_confirm_blocks_when_callback_declines(
+    tmp_path: Path,
+) -> None:
+    """A CONFIRM-matched path is blocked when the confirm callback declines."""
+    f = tmp_path / "secret.txt"
+    f.write_text("top secret")
+    key = f"ReadFile:{f.resolve().as_posix()}"
+    permissions = PermissionEngine(PermissionRulesConfig(confirm={key}))
+    confirm = AsyncMock(return_value=False)
+    tool = ReadFile(permissions=permissions, confirm=confirm)
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke(path=str(f))
+    confirm.assert_awaited_once()

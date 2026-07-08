@@ -124,3 +124,18 @@ async def test_write_confirm_proceeds_when_callback_approves(
     tool = WriteFile(permissions=permissions, confirm=confirm)
     await tool.invoke(path=str(f), content="approved write")
     assert f.read_text() == "approved write"
+
+
+async def test_write_confirm_blocks_when_callback_declines(
+    tmp_path: Path,
+) -> None:
+    """A CONFIRM-matched path is blocked when the confirm callback declines."""
+    f = tmp_path / "protected.txt"
+    key = f"WriteFile:{f.resolve().as_posix()}"
+    permissions = PermissionEngine(PermissionRulesConfig(confirm={key}))
+    confirm = AsyncMock(return_value=False)
+    tool = WriteFile(permissions=permissions, confirm=confirm)
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke(path=str(f), content="unattended write")
+    assert not f.exists()
+    confirm.assert_awaited_once()
