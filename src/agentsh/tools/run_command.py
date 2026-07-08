@@ -1,23 +1,19 @@
 """RunCommand tool — executes shell commands with permission gating."""
 
 from agentsh.models import CommandResult, JsonValue
-from agentsh.permissions import PermissionEngine, PermissionLevel
+from agentsh.permissions import ConfirmCallback, PermissionEngine
 from agentsh.shell.protocol import Shell
 from agentsh.tools import SchemaDict
-
-
-class PermissionDeniedError(Exception):
-    """Raised when a command is blocked by a DENY permission rule."""
 
 
 class RunCommand:
     """Executes a shell command through the Shell backend.
 
-    When a PermissionEngine is provided:
+    Every call is gated by the mandatory PermissionEngine:
     - DENY: raises PermissionDeniedError immediately.
-    - CONFIRM: the caller must prompt before calling invoke().
+    - CONFIRM: the injected confirm callback is awaited; raises if none
+      is configured or if it declines.
     - ALLOW: passes through without prompting.
-    When permissions is None, all commands are allowed.
     """
 
     name = "RunCommand"
@@ -42,26 +38,29 @@ class RunCommand:
     }
 
     def __init__(
-        self, shell: Shell, permissions: PermissionEngine | None
+        self,
+        shell: Shell,
+        permissions: PermissionEngine,
+        confirm: ConfirmCallback | None = None,
     ) -> None:
-        """Initialise with a Shell backend and an optional PermissionEngine."""
+        """Initialise with a Shell backend, a mandatory PermissionEngine.
+
+        confirm is awaited for CONFIRM-level commands; if None, such
+        commands are refused rather than silently executed.
+        """
         self._shell = shell
         self._permissions = permissions
-
-    def _check_key(self, command: str) -> PermissionLevel:
-        """Return the permission level for the command, or None if no engine."""
-        if self._permissions is None:
-            return PermissionLevel.ALLOW
-
-        return self._permissions.evaluate(f"RunCommand:{command}")
+        self._confirm = confirm
 
     async def invoke(self, **kwargs: JsonValue) -> CommandResult:
-        """Execute the given command.
+        """Execute the given command after enforcing permissions.
 
         Raises:
-            PermissionDeniedError if denied
+            PermissionDeniedError: if denied by policy, or if CONFIRM is
+                required and no confirm callback approves the call.
         """
         command = str(kwargs["command"])
-        if self._check_key(command) == PermissionLevel.DENY:
-            raise PermissionDeniedError(f"Command denied by policy: {command}")
+        await self._permissions.enforce(
+            "RunCommand", {"command": command}, self._confirm
+        )
         return await self._shell.execute(command)

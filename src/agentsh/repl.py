@@ -54,8 +54,11 @@ async def run_repl(app: App) -> None:
     from agentsh.agent_loop import AgentLoopLimitError, run_agent_loop
     from agentsh.classifier import InputKind, agent_query, classify
     from agentsh.events import CommandFinished, CommandStarted, ContextCollected
-    from agentsh.permissions import PermissionLevel
-    from agentsh.tools.run_command import PermissionDeniedError
+    from agentsh.permissions import (
+        PermissionDeniedError,
+        PermissionLevel,
+        tool_call_key,
+    )
 
     history_dir = Path.home() / ".local" / "share" / "agentsh"
     history_dir.mkdir(parents=True, exist_ok=True)
@@ -84,15 +87,9 @@ async def run_repl(app: App) -> None:
 
         match kind:
             case InputKind.SHELL:
-                key = f"RunCommand:{raw}"
-                level = app.permissions.evaluate(key)
-                if level == PermissionLevel.DENY:
+                key = tool_call_key("RunCommand", {"command": raw})
+                if app.permissions.evaluate(key) == PermissionLevel.DENY:
                     print(f"[agentsh] denied: {raw}", file=sys.stderr)
-                    continue
-                if level == PermissionLevel.CONFIRM and not await ui.confirm(
-                    "RunCommand", {"command": raw}
-                ):
-                    print("[agentsh] cancelled.", file=sys.stderr)
                     continue
                 try:
                     await bus.publish(CommandStarted(command=raw))
@@ -111,6 +108,14 @@ async def run_repl(app: App) -> None:
                     )
                     ui.render(result)
                 except PermissionDeniedError as e:
+                    duration_ms = (time.monotonic() - t0) * 1000
+                    await bus.publish(
+                        CommandFinished(
+                            command=raw,
+                            exit_code=126,
+                            duration_ms=duration_ms,
+                        )
+                    )
                     print(f"[agentsh] {e}", file=sys.stderr)
 
             case InputKind.AGENT:

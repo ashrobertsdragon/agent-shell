@@ -3,10 +3,12 @@
 from typing import TYPE_CHECKING
 
 from agentsh.events import AgentResponded, EventBus, ToolDenied, ToolInvoked
-from agentsh.models import CommandResult, Message, ToolCall, ToolResult
-from agentsh.permissions import PermissionLevel
-from agentsh.tools._paths import canonical_path
-from agentsh.tools.run_command import PermissionDeniedError
+from agentsh.models import CommandResult, Message, ToolResult
+from agentsh.permissions import (
+    PermissionDeniedError,
+    PermissionLevel,
+    tool_call_key,
+)
 
 if TYPE_CHECKING:
     from agentsh.agent.base import Agent
@@ -18,24 +20,6 @@ if TYPE_CHECKING:
 
 class AgentLoopLimitError(Exception):
     """Raised when the agentic loop exceeds its maximum iteration count."""
-
-
-def _tool_call_key(tc: ToolCall) -> str:
-    """Build the permission key for a tool call.
-
-    Path arguments are canonicalized so alternate spellings of the same
-    file (./, ../, ~, symlinks) evaluate against the same key the tool
-    will actually operate on.
-    """
-    match tc.tool_name:
-        case "RunCommand":
-            command = str(tc.arguments.get("command", "")).strip()
-            return f"RunCommand:{command}"
-        case "ReadFile" | "WriteFile":
-            path = canonical_path(str(tc.arguments.get("path", "")))
-            return f"{tc.tool_name}:{path.as_posix()}"
-        case _:
-            return tc.tool_name
 
 
 async def run_agent_loop(
@@ -51,8 +35,11 @@ async def run_agent_loop(
 ) -> Message:
     """Run the agent until it produces a final response with no tool calls.
 
-    CONFIRM-level tool calls prompt the user; if denied, an error ToolResult
-    is injected so the agent can recover gracefully.
+    DENY-level calls are short-circuited here so the agent gets a fast,
+    clear rejection. CONFIRM-level calls are enforced inside each tool's
+    own invoke() (which prompts via its injected confirm callback); a
+    PermissionDeniedError raised from there is turned into an error
+    ToolResult so the agent can recover gracefully.
 
     Raises AgentLoopLimitError if the loop exceeds max_iterations without
     a terminal (tool-call-free) response.
@@ -75,35 +62,17 @@ async def run_agent_loop(
 
         tool_results: list[ToolResult] = []
         for tc in response.tool_calls:
-            key = _tool_call_key(tc)
-            level = permissions.evaluate(key)
-
-            match level:
-                case PermissionLevel.DENY:
-                    await bus.publish(
-                        ToolDenied(tool_name=tc.tool_name, key=key)
+            key = tool_call_key(tc.tool_name, tc.arguments)
+            if permissions.evaluate(key) == PermissionLevel.DENY:
+                await bus.publish(ToolDenied(tool_name=tc.tool_name, key=key))
+                tool_results.append(
+                    ToolResult(
+                        call_id=tc.call_id,
+                        content="Permission denied by policy.",
+                        is_error=True,
                     )
-                    tool_results.append(
-                        ToolResult(
-                            call_id=tc.call_id,
-                            content="Permission denied by policy.",
-                            is_error=True,
-                        )
-                    )
-                    continue
-                case PermissionLevel.CONFIRM:
-                    if not await ui.confirm(tc.tool_name, tc.arguments):
-                        await bus.publish(
-                            ToolDenied(tool_name=tc.tool_name, key=key)
-                        )
-                        tool_results.append(
-                            ToolResult(
-                                call_id=tc.call_id,
-                                content="Permission denied by user.",
-                                is_error=True,
-                            )
-                        )
-                        continue
+                )
+                continue
 
             try:
                 tool = tools.get(tc.tool_name)
@@ -127,13 +96,7 @@ async def run_agent_loop(
                     ToolResult(call_id=tc.call_id, content=content)
                 )
             except PermissionDeniedError as e:
-                await bus.publish(
-                    ToolInvoked(
-                        tool_name=tc.tool_name,
-                        arguments=dict(tc.arguments),
-                        success=False,
-                    )
-                )
+                await bus.publish(ToolDenied(tool_name=tc.tool_name, key=key))
                 tool_results.append(
                     ToolResult(
                         call_id=tc.call_id, content=str(e), is_error=True
