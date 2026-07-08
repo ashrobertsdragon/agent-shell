@@ -7,7 +7,7 @@ import pytest
 from agentsh.agent_loop import AgentLoopLimitError, run_agent_loop
 from agentsh.events import EventBus
 from agentsh.models import CommandResult, Message, ToolCall
-from agentsh.permissions import PermissionLevel
+from agentsh.permissions import PermissionDeniedError, PermissionLevel
 
 
 def _text(content: str = "Done.") -> Message:
@@ -151,21 +151,28 @@ async def test_deny_injects_error_tool_result(
     assert "denied" in tool_msg.tool_results[0].content.lower()
 
 
-async def test_confirm_denied_by_user_injects_error_tool_result(
+async def test_permission_denied_from_tool_injects_error_tool_result(
+    ui: MagicMock,
     bus: EventBus,
 ) -> None:
-    """When the user declines a CONFIRM prompt, an error ToolResult is injected."""
+    """CONFIRM enforcement now lives inside the tool's own invoke(); when it
+    raises PermissionDeniedError (e.g. a declined prompt or a DENY that
+    slipped past the loop's own pre-check), an error ToolResult is
+    injected so the agent can recover gracefully.
+    """
     perms = MagicMock()
     perms.evaluate.return_value = PermissionLevel.CONFIRM
-
-    ui = MagicMock()
-    ui.confirm = AsyncMock(return_value=False)
 
     agent = AsyncMock()
     agent.respond.side_effect = [_tool_call_msg(), _text("User declined.")]
 
     registry = MagicMock()
     registry.schemas.return_value = []
+    tool = AsyncMock()
+    tool.invoke.side_effect = PermissionDeniedError(
+        "RunCommand denied by user: RunCommand:ls"
+    )
+    registry.get.return_value = tool
 
     conversation: list[Message] = [Message(role="user", content="do something")]
     await run_agent_loop(
@@ -180,7 +187,7 @@ async def test_confirm_denied_by_user_injects_error_tool_result(
 
     tool_msg = conversation[-2]
     assert tool_msg.tool_results[0].is_error is True
-    assert "user" in tool_msg.tool_results[0].content.lower()
+    assert "denied by user" in tool_msg.tool_results[0].content.lower()
 
 
 async def test_iteration_limit_raises(

@@ -4,6 +4,7 @@ import re
 from typing import cast
 
 from agentsh.models import JsonValue
+from agentsh.permissions import ConfirmCallback, PermissionEngine
 from agentsh.tools import SchemaDict
 from agentsh.tools._paths import canonical_path
 
@@ -27,7 +28,14 @@ def _apply_patch(original: str, patch: str) -> str:
 
 
 class WriteFile:
-    """Writes content to a file, or applies a SEARCH/REPLACE patch."""
+    """Writes content to a file, or applies a SEARCH/REPLACE patch.
+
+    Every call is gated by the mandatory PermissionEngine:
+    - DENY: raises PermissionDeniedError immediately.
+    - CONFIRM: the injected confirm callback is awaited; raises if none
+      is configured or if it declines.
+    - ALLOW: passes through without prompting.
+    """
 
     name = "WriteFile"
     description = (
@@ -70,15 +78,40 @@ class WriteFile:
         },
     }
 
+    def __init__(
+        self,
+        permissions: PermissionEngine,
+        confirm: ConfirmCallback | None = None,
+    ) -> None:
+        """Initialise with a mandatory PermissionEngine.
+
+        confirm is awaited for CONFIRM-level paths; if None, such writes
+        are refused rather than silently applied.
+        """
+        self._permissions = permissions
+        self._confirm = confirm
+
     async def invoke(self, **kwargs: JsonValue) -> str:
-        """Write or patch the file; returns a confirmation string."""
-        path = canonical_path(str(kwargs["path"]))
+        """Write or patch the file after enforcing permissions.
+
+        Raises:
+            PermissionDeniedError: if denied by policy, or if CONFIRM is
+                required and no confirm callback approves the call.
+            ValueError: if neither content nor patch is supplied, or the
+                patch does not apply cleanly.
+        """
+        raw_path = str(kwargs["path"])
         content: str | None = cast(str | None, kwargs.get("content"))
         patch: str | None = cast(str | None, kwargs.get("patch"))
 
         if patch is None and content is None:
             raise ValueError("WriteFile requires either content or patch.")
 
+        await self._permissions.enforce(
+            "WriteFile", {"path": raw_path}, self._confirm
+        )
+
+        path = canonical_path(raw_path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
         if patch is not None:

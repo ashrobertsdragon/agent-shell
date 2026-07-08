@@ -6,9 +6,9 @@ import pytest
 
 from agentsh.config import PermissionRulesConfig
 from agentsh.models import CommandResult
-from agentsh.permissions import PermissionEngine
+from agentsh.permissions import PermissionDeniedError, PermissionEngine
 from agentsh.tools.protocol import ToolRegistry
-from agentsh.tools.run_command import PermissionDeniedError, RunCommand
+from agentsh.tools.run_command import RunCommand
 
 
 @pytest.fixture
@@ -27,9 +27,17 @@ def mock_shell() -> AsyncMock:
     return shell
 
 
-async def test_run_command_invokes_shell(mock_shell: AsyncMock) -> None:
+@pytest.fixture
+def allow_all() -> PermissionEngine:
+    """PermissionEngine that ALLOWs every RunCommand call."""
+    return PermissionEngine(PermissionRulesConfig(allow={"RunCommand:*"}))
+
+
+async def test_run_command_invokes_shell(
+    mock_shell: AsyncMock, allow_all: PermissionEngine
+) -> None:
     """invoke delegates to shell.execute and returns its result."""
-    tool = RunCommand(shell=mock_shell, permissions=None)
+    tool = RunCommand(shell=mock_shell, permissions=allow_all)
     result = await tool.invoke(command="echo hello")
     mock_shell.execute.assert_called_once_with("echo hello")
     assert result.stdout == "hello\n"
@@ -42,6 +50,60 @@ async def test_run_command_deny_raises(mock_shell: AsyncMock) -> None:
     tool = RunCommand(shell=mock_shell, permissions=permissions)
     with pytest.raises(PermissionDeniedError):
         await tool.invoke(command="rm -rf /")
+    mock_shell.execute.assert_not_called()
+
+
+async def test_run_command_confirm_blocks_without_callback(
+    mock_shell: AsyncMock,
+) -> None:
+    """A CONFIRM-matched command is blocked when invoked directly with no
+    confirm callback wired in — this is the bypass scenario the tool's
+    internal enforcement exists to close (calling the tool without going
+    through the agent loop at all).
+    """
+    rules = PermissionRulesConfig(confirm={"RunCommand:git commit*"})
+    permissions = PermissionEngine(rules)
+    tool = RunCommand(shell=mock_shell, permissions=permissions)
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke(command="git commit -m 'x'")
+    mock_shell.execute.assert_not_called()
+
+
+async def test_run_command_confirm_blocks_when_callback_declines(
+    mock_shell: AsyncMock,
+) -> None:
+    """A CONFIRM-matched command is blocked when the confirm callback
+    declines the call.
+    """
+    rules = PermissionRulesConfig(confirm={"RunCommand:git commit*"})
+    permissions = PermissionEngine(rules)
+    confirm = AsyncMock(return_value=False)
+    tool = RunCommand(
+        shell=mock_shell, permissions=permissions, confirm=confirm
+    )
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke(command="git commit -m 'x'")
+    confirm.assert_awaited_once_with(
+        "RunCommand", {"command": "git commit -m 'x'"}
+    )
+    mock_shell.execute.assert_not_called()
+
+
+async def test_run_command_confirm_proceeds_when_callback_approves(
+    mock_shell: AsyncMock,
+) -> None:
+    """A CONFIRM-matched command executes once the confirm callback
+    approves it.
+    """
+    rules = PermissionRulesConfig(confirm={"RunCommand:git commit*"})
+    permissions = PermissionEngine(rules)
+    confirm = AsyncMock(return_value=True)
+    tool = RunCommand(
+        shell=mock_shell, permissions=permissions, confirm=confirm
+    )
+    result = await tool.invoke(command="git commit -m 'x'")
+    mock_shell.execute.assert_called_once_with("git commit -m 'x'")
+    assert result.stdout == "hello\n"
 
 
 def test_tool_registry_get() -> None:
