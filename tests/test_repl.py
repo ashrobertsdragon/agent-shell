@@ -15,15 +15,15 @@ from agentsh.events import (
     EventBus,
 )
 from agentsh.models import CommandResult, ContextFragment, Message
-from agentsh.permissions import PermissionLevel
+from agentsh.permissions import PermissionDeniedError, PermissionLevel
 from agentsh.repl import UI, run_repl
-from agentsh.tools.run_command import PermissionDeniedError
 
 
 @pytest.fixture(autouse=True)
 def _isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
     """Redirect the REPL's on-disk history file away from the real home dir."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
 
 def _make_app(
@@ -128,22 +128,32 @@ async def test_shell_deny_skips_execution(
     assert "denied" in capsys.readouterr().err
 
 
-async def test_shell_confirm_declined_skips_execution(
+async def test_shell_confirm_declined_still_invokes_and_pairs_events(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Declining a CONFIRM prompt cancels execution without invoking the tool."""
+    """A declined CONFIRM prompt is enforced inside RunCommand.invoke()
+    itself (not pre-checked by the REPL, which only fast-paths DENY), so
+    invoke() is still called; it raises PermissionDeniedError, which the
+    REPL reports and pairs with a CommandFinished(exit_code=126) so the
+    dangling CommandStarted from the DENY-only fast-path is never left
+    unmatched.
+    """
     app, run_command = _make_app(permission_level=PermissionLevel.CONFIRM)
-    ui = MagicMock()
-    ui.confirm = AsyncMock(return_value=False)
+    run_command.invoke = AsyncMock(
+        side_effect=PermissionDeniedError("RunCommand denied by user: x")
+    )
+    finished: list[CommandFinished] = []
+    app.event_bus.subscribe(CommandFinished, finished.append)
 
     with patch(
         "agentsh.classifier.classify",
         new=AsyncMock(return_value=InputKind.SHELL),
     ):
-        await _run_with_inputs(app, ["git commit -m x", EOFError()], ui=ui)
+        await _run_with_inputs(app, ["git commit -m x", EOFError()])
 
-    run_command.invoke.assert_not_called()
-    assert "cancelled" in capsys.readouterr().err
+    run_command.invoke.assert_called_once_with(command="git commit -m x")
+    assert "denied by user" in capsys.readouterr().err
+    assert [e.exit_code for e in finished] == [126]
 
 
 async def test_shell_success_publishes_events_and_renders() -> None:
