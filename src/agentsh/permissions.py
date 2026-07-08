@@ -8,7 +8,7 @@ from agentsh.config import PermissionRulesConfig
 
 _RUN_COMMAND_PREFIX = "RunCommand:"
 
-_SHELL_METACHARACTERS = frozenset(";&|$`<>(){}\n\r\\")
+_SHELL_METACHARACTERS = frozenset(";&|$`<>(){}\n\r\\%!\x00")
 
 
 class PermissionLevel(Enum):
@@ -24,12 +24,13 @@ def _command_has_shell_metacharacters(command: str) -> bool:
 
     Covers chaining/substitution operators (``;``, ``&``, ``|``, ``$``,
     backticks), redirection (``<``, ``>``), subshells/grouping
-    (``(``, ``)``, ``{``, ``}``), escaping (``\\``), and embedded
-    newlines. Also treats commands that ``shlex`` cannot tokenize (e.g.
-    unbalanced quotes) as suspicious, since their real behavior under a
-    shell is ambiguous.
+    (``(``, ``)``, ``{``, ``}``), escaping (``\\``), embedded newlines,
+    cmd.exe variable expansion (``%``, ``!``), and null bytes. Also
+    treats commands that ``shlex`` cannot tokenize (e.g. unbalanced
+    quotes) as suspicious, since their real behavior under a shell is
+    ambiguous.
     """
-    if any(char in _SHELL_METACHARACTERS for char in command):
+    if not _SHELL_METACHARACTERS.isdisjoint(command):
         return True
     try:
         shlex.split(command)
@@ -68,11 +69,10 @@ class PermissionEngine:
         if any(fnmatch(tool_call_key, p) for p in self._rules.confirm):
             return PermissionLevel.CONFIRM
 
-        command = tool_call_key.removeprefix(_RUN_COMMAND_PREFIX)
-        if command != tool_call_key and _command_has_shell_metacharacters(
-            command
-        ):
-            return PermissionLevel.CONFIRM
+        if tool_call_key.startswith(_RUN_COMMAND_PREFIX):
+            command = tool_call_key.removeprefix(_RUN_COMMAND_PREFIX)
+            if _command_has_shell_metacharacters(command):
+                return PermissionLevel.CONFIRM
 
         if any(fnmatch(tool_call_key, p) for p in self._rules.allow):
             return PermissionLevel.ALLOW

