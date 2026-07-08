@@ -10,21 +10,32 @@ from pathlib import Path
 
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
+from agentsh.shell.plugin._base import ProcessBackedShell, new_marker
 
 _SENTINEL = "__AGENTSH_DONE_8675309__"
 
 _PROMPT_TIMEOUT = 2.0
 
 
-@register("bash")
-class BashShell:
-    """Wraps a persistent bash subprocess; tracks cwd after every command."""
+def _parse_sentinel(line: str, marker: str) -> tuple[int, str] | None:
+    """Return (exit_code, cwd) if line is an exact sentinel match for marker.
 
-    def __init__(self) -> None:
-        """Initialise subprocess."""
-        self._process: asyncio.subprocess.Process | None = None
-        self._cwd = os.getcwd()
-        self._lock = asyncio.Lock()
+    The comparison is against the whole line (split into exactly three
+    fields), not a prefix or substring, so command output that merely
+    contains sentinel-like text cannot be mistaken for the real one.
+    """
+    parts = line.rstrip("\n").split(":", 2)
+    if len(parts) != 3 or parts[0] != marker:
+        return None
+    try:
+        return int(parts[1]), parts[2]
+    except ValueError:
+        return None
+
+
+@register("bash")
+class BashShell(ProcessBackedShell):
+    """Wraps a persistent bash subprocess; tracks cwd after every command."""
 
     async def _start_process(self) -> asyncio.subprocess.Process:
         """Start the bash subprocess."""
@@ -34,13 +45,6 @@ class BashShell:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-
-    @property
-    async def process(self) -> asyncio.subprocess.Process:
-        """Property for subprocess instance."""
-        if self._process is None or self._process.returncode is not None:
-            self._process = await self._start_process()
-        return self._process
 
     async def execute(self, command: str) -> CommandResult:
         """Execute a shell command.
@@ -58,12 +62,13 @@ class BashShell:
             os.close(fd)
 
             start = time.monotonic()
+            marker = new_marker(_SENTINEL)
             wrapped = (
                 f"exec 3>&2 2>{stderr_path}\n"
                 f"{command}\n"
                 f"__ec__=$?\n"
                 f"exec 2>&3 3>&-\n"
-                f'printf "%s:%d:%s\\n" "{_SENTINEL}" "$__ec__" "$(pwd)"\n'
+                f'printf "%s:%d:%s\\n" "{marker}" "$__ec__" "$(pwd)"\n'
             )
             chunks: list[str] = []
             exit_code = 1
@@ -76,10 +81,9 @@ class BashShell:
                     raise ChildProcessError
                 async for line in proc.stdout:
                     decoded = line.decode(errors="replace")
-                    if decoded.startswith(f"{_SENTINEL}:"):
-                        _, code_str, cwd = decoded.strip().split(":", 2)
-                        exit_code = int(code_str)
-                        self._cwd = cwd
+                    parsed = _parse_sentinel(decoded, marker)
+                    if parsed is not None:
+                        exit_code, self._cwd = parsed
                         break
                     chunks.append(decoded)
 
@@ -105,11 +109,6 @@ class BashShell:
                 )
             finally:
                 Path(stderr_path).unlink(missing_ok=True)
-
-    @property
-    def cwd(self) -> str:
-        """Return the last tracked working directory."""
-        return self._cwd
 
     async def env(self) -> dict[str, str]:
         """Return the subprocess environment by running env."""
@@ -200,9 +199,3 @@ class BashShell:
                 f.write(command + "\n")
         except OSError:
             pass
-
-    async def close(self) -> None:
-        """Terminate the underlying bash subprocess."""
-        if self._process and self._process.returncode is None:
-            self._process.terminate()
-            await self._process.wait()

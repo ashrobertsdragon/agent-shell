@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
+from agentsh.shell.plugin._base import ProcessBackedShell, new_marker
 
 _SENTINEL = "__AGENTSH_CMD_DONE_8675309__"
 
@@ -80,14 +81,21 @@ def _expand_prompt(template: str, cwd: str) -> str:
     return re.sub(r"\$(.)", _sub, template)
 
 
-def _parse_sentinel(line: str) -> tuple[int, str]:
-    r"""Parse a ``SENTINEL:code:cwd`` line into (exit_code, cwd).
+def _parse_sentinel(line: str, marker: str) -> tuple[int, str] | None:
+    r"""Return (exit_code, cwd) if line is an exact sentinel match for marker.
 
     maxsplit=2 keeps cwd intact as the final field, so drive-letter
-    colons in ``%cd%`` (``C:\...``) are safe.
+    colons in ``%cd%`` (``C:\...``) are safe. The first field must equal
+    marker exactly (not merely start with it), so command output that
+    contains sentinel-like text cannot be mistaken for the real one.
     """
-    _, code, cwd = line.strip().split(":", 2)
-    return int(code), cwd
+    parts = line.strip().split(":", 2)
+    if len(parts) != 3 or parts[0] != marker:
+        return None
+    try:
+        return int(parts[1]), parts[2]
+    except ValueError:
+        return None
 
 
 def _complete_from_path(partial: str, path: str, pathext: str) -> list[str]:
@@ -124,7 +132,7 @@ def _detect_clink() -> str | None:
 
 
 @register("cmd")
-class CmdShell:
+class CmdShell(ProcessBackedShell):
     """Wraps a persistent cmd.exe subprocess; tracks cwd per command.
 
     cmd.exe has no persistent history, so agentsh keeps its own history
@@ -139,9 +147,7 @@ class CmdShell:
 
     def __init__(self) -> None:
         """Initialise subprocess state, history path, and clink lookup."""
-        self._process: asyncio.subprocess.Process | None = None
-        self._cwd = os.getcwd()
-        self._lock = asyncio.Lock()
+        super().__init__()
         self._exe: str | None = None
         self._history_path = _default_history_path()
         self._clink = _detect_clink()
@@ -165,13 +171,6 @@ class CmdShell:
             await proc.stdin.drain()
         return proc
 
-    @property
-    async def process(self) -> asyncio.subprocess.Process:
-        """Property for subprocess instance."""
-        if self._process is None or self._process.returncode is not None:
-            self._process = await self._start_process()
-        return self._process
-
     async def execute(self, command: str) -> CommandResult:
         """Execute a cmd command.
 
@@ -192,9 +191,10 @@ class CmdShell:
             os.close(fd)
 
             start = time.monotonic()
+            marker = new_marker(_SENTINEL)
             wrapped = (
                 f'({command} ) 2>"{stderr_path}"\r\n'
-                f"echo {_SENTINEL}:%errorlevel%:%cd%\r\n"
+                f"echo {marker}:%errorlevel%:%cd%\r\n"
             )
             chunks: list[str] = []
             exit_code = 1
@@ -207,8 +207,9 @@ class CmdShell:
                     raise ChildProcessError
                 async for line in proc.stdout:
                     decoded = line.decode(errors="replace")
-                    if decoded.startswith(f"{_SENTINEL}:"):
-                        exit_code, self._cwd = _parse_sentinel(decoded)
+                    parsed = _parse_sentinel(decoded, marker)
+                    if parsed is not None:
+                        exit_code, self._cwd = parsed
                         break
                     chunks.append(decoded.replace("\r\n", "\n"))
 
@@ -234,11 +235,6 @@ class CmdShell:
                 )
             finally:
                 Path(stderr_path).unlink(missing_ok=True)
-
-    @property
-    def cwd(self) -> str:
-        """Return the last tracked working directory."""
-        return self._cwd
 
     async def env(self) -> dict[str, str]:
         """Return the subprocess environment by running set.
@@ -311,9 +307,3 @@ class CmdShell:
                 pass
 
         await asyncio.to_thread(_mirror)
-
-    async def close(self) -> None:
-        """Terminate the underlying cmd subprocess."""
-        if self._process and self._process.returncode is None:
-            self._process.terminate()
-            await self._process.wait()

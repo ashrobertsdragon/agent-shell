@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
+from agentsh.shell.plugin._base import ProcessBackedShell, new_marker
 
 _SENTINEL = "__AGENTSH_PS_DONE_8675309__"
 
@@ -60,14 +61,21 @@ def _psreadline_history_path(platform: str = os.name) -> Path:
     return Path(data) / "powershell" / "PSReadLine" / "ConsoleHost_history.txt"
 
 
-def _parse_sentinel(line: str) -> tuple[int, str]:
-    r"""Parse a ``SENTINEL:code:cwd`` line into (exit_code, cwd).
+def _parse_sentinel(line: str, marker: str) -> tuple[int, str] | None:
+    r"""Return (exit_code, cwd) if line is an exact sentinel match for marker.
 
     maxsplit=2 keeps cwd intact as the final field, so drive-letter
-    colons in Windows paths (``C:\...``) are safe.
+    colons in Windows paths (``C:\...``) are safe. The first field must
+    equal marker exactly (not merely start with it), so command output
+    that contains sentinel-like text cannot be mistaken for the real one.
     """
-    _, code, cwd = line.strip().split(":", 2)
-    return int(code), cwd
+    parts = line.strip().split(":", 2)
+    if len(parts) != 3 or parts[0] != marker:
+        return None
+    try:
+        return int(parts[1]), parts[2]
+    except ValueError:
+        return None
 
 
 def _ps_quote(value: str) -> str:
@@ -76,12 +84,16 @@ def _ps_quote(value: str) -> str:
     return f"'{escaped}'"
 
 
-def _wrap_command(command: str, stderr_path: str) -> str:
+def _wrap_command(
+    command: str, stderr_path: str, marker: str = _SENTINEL
+) -> str:
     """Wrap a command to capture stderr and emit the sentinel line.
 
     The command is base64-encoded so any content is a single safe
     statement; the stderr path is quoted as a literal so paths with
-    single quotes cannot break the wrapper syntax.
+    single quotes cannot break the wrapper syntax. marker is the
+    per-call sentinel (base sentinel plus a random nonce) so command
+    output cannot forge completion.
     """
     b64 = base64.b64encode(command.encode()).decode("ascii")
     stderr_literal = _ps_quote(stderr_path)
@@ -94,12 +106,12 @@ def _wrap_command(command: str, stderr_path: str) -> str:
         f"Add-Content {stderr_literal}; $__ok = $false }}\n"
         "$__ec = if ($__ok -and -not $LASTEXITCODE) { 0 } "
         "elseif ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }\n"
-        f'"{_SENTINEL}:$__ec:$((Get-Location).Path)"\n'
+        f'"{marker}:$__ec:$((Get-Location).Path)"\n'
     )
 
 
 @register("powershell")
-class PowerShellShell:
+class PowerShellShell(ProcessBackedShell):
     """Wraps a persistent PowerShell subprocess; tracks cwd per command.
 
     Commands are base64-encoded and run via Invoke-Expression so every
@@ -110,9 +122,7 @@ class PowerShellShell:
 
     def __init__(self) -> None:
         """Initialise subprocess state without resolving an executable."""
-        self._process: asyncio.subprocess.Process | None = None
-        self._cwd = os.getcwd()
-        self._lock = asyncio.Lock()
+        super().__init__()
         self._exe: str | None = None
 
     async def _start_process(self) -> asyncio.subprocess.Process:
@@ -135,13 +145,6 @@ class PowerShellShell:
             await proc.stdin.drain()
         return proc
 
-    @property
-    async def process(self) -> asyncio.subprocess.Process:
-        """Property for subprocess instance."""
-        if self._process is None or self._process.returncode is not None:
-            self._process = await self._start_process()
-        return self._process
-
     async def execute(self, command: str) -> CommandResult:
         """Execute a PowerShell command.
 
@@ -162,7 +165,8 @@ class PowerShellShell:
             os.close(fd)
 
             start = time.monotonic()
-            wrapped = _wrap_command(command, stderr_path)
+            marker = new_marker(_SENTINEL)
+            wrapped = _wrap_command(command, stderr_path, marker)
             chunks: list[str] = []
             exit_code = 1
             try:
@@ -174,8 +178,9 @@ class PowerShellShell:
                     raise ChildProcessError
                 async for line in proc.stdout:
                     decoded = line.decode(errors="replace")
-                    if decoded.startswith(f"{_SENTINEL}:"):
-                        exit_code, self._cwd = _parse_sentinel(decoded)
+                    parsed = _parse_sentinel(decoded, marker)
+                    if parsed is not None:
+                        exit_code, self._cwd = parsed
                         break
                     chunks.append(decoded)
 
@@ -201,11 +206,6 @@ class PowerShellShell:
                 )
             finally:
                 Path(stderr_path).unlink(missing_ok=True)
-
-    @property
-    def cwd(self) -> str:
-        """Return the last tracked working directory."""
-        return self._cwd
 
     async def env(self) -> dict[str, str]:
         """Return the subprocess environment via Get-ChildItem env:."""
@@ -316,9 +316,3 @@ class PowerShellShell:
                 f.write(command + "\n")
         except OSError:
             pass
-
-    async def close(self) -> None:
-        """Terminate the underlying PowerShell subprocess."""
-        if self._process and self._process.returncode is None:
-            self._process.terminate()
-            await self._process.wait()

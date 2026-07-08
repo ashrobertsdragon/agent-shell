@@ -84,16 +84,28 @@ def test_history_path_linux_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_parse_sentinel_windows_path() -> None:
     """Drive-letter colons in cwd survive because cwd is the last field."""
-    code, cwd = _parse_sentinel(f"{_SENTINEL}:0:C:\\Users\\x\r\n")
-    assert code == 0
-    assert cwd == "C:\\Users\\x"
+    marker = f"{_SENTINEL}_nonce"
+    parsed = _parse_sentinel(f"{marker}:0:C:\\Users\\x\r\n", marker)
+    assert parsed == (0, "C:\\Users\\x")
 
 
 def test_parse_sentinel_nonzero_code() -> None:
     """Nonzero exit codes are parsed as ints."""
-    code, cwd = _parse_sentinel(f"{_SENTINEL}:42:/tmp\n")
-    assert code == 42
-    assert cwd == "/tmp"
+    marker = f"{_SENTINEL}_nonce"
+    parsed = _parse_sentinel(f"{marker}:42:/tmp\n", marker)
+    assert parsed == (42, "/tmp")
+
+
+def test_parse_sentinel_rejects_lookalike_without_matching_marker() -> None:
+    """A line whose marker nonce differs is not treated as a match.
+
+    This is the regression case for sentinel spoofing: command output
+    that merely starts with the base sentinel string, but carries a
+    different (or no) nonce, must not desync the next command.
+    """
+    marker = f"{_SENTINEL}_nonce-a"
+    spoofed = f"{_SENTINEL}_nonce-b:0:/tmp\n"
+    assert _parse_sentinel(spoofed, marker) is None
 
 
 def test_ps_quote_escapes_single_quotes() -> None:
@@ -107,6 +119,13 @@ def test_wrap_command_quotes_stderr_path_with_single_quote() -> None:
     wrapped = _wrap_command("echo hi", "/home/o'connor/stderr.txt")
     assert "'/home/o''connor/stderr.txt'" in wrapped
     assert _SENTINEL in wrapped
+
+
+def test_wrap_command_embeds_supplied_marker() -> None:
+    """The per-call marker (sentinel plus nonce), not the bare sentinel, is emitted."""
+    marker = f"{_SENTINEL}:some-nonce"
+    wrapped = _wrap_command("echo hi", "/tmp/stderr.txt", marker)
+    assert f'"{marker}:$__ec' in wrapped
 
 
 async def test_history_round_trip(

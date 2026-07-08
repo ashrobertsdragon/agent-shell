@@ -42,6 +42,14 @@ class Shell(Protocol):
         """Append a command to the shell's persistent history store."""
         ...
 
+    async def reset(self) -> None:
+        """Force the underlying subprocess to restart on next use.
+
+        Called when the caller detects the shell may be desynced, e.g.
+        after abandoning an in-flight command on timeout.
+        """
+        ...
+
     async def close(self) -> None:
         """Terminate the underlying subprocess."""
         ...

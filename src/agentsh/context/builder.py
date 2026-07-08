@@ -30,6 +30,9 @@ class ContextBuilder:
                 return await asyncio.wait_for(
                     p.collect(shell), timeout=self._timeout
                 )
+            except TimeoutError:
+                await shell.reset()
+                return None
             except Exception:
                 return None
 
