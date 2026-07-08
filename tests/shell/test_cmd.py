@@ -40,9 +40,23 @@ def test_expand_prompt_unknown_code_dropped() -> None:
 
 def test_parse_sentinel_drive_letter() -> None:
     """Drive-letter colons in %cd% survive because cwd is the last field."""
-    code, cwd = _parse_sentinel(f"{_SENTINEL}:1:C:\\Program Files\r\n")
-    assert code == 1
-    assert cwd == "C:\\Program Files"
+    marker = f"{_SENTINEL}_nonce"
+    parsed = _parse_sentinel(f"{marker}:1:C:\\Program Files\r\n", marker)
+    assert parsed == (1, "C:\\Program Files")
+
+
+def test_parse_sentinel_rejects_lookalike_without_matching_marker() -> None:
+    """A line that merely starts with the sentinel text is not a match."""
+    marker = f"{_SENTINEL}_nonce-a"
+    other_marker = f"{_SENTINEL}_nonce-b"
+    assert _parse_sentinel(f"{other_marker}:0:/tmp\n", marker) is None
+
+
+def test_parse_sentinel_rejects_malformed_line() -> None:
+    """A line missing the code/cwd fields returns None instead of raising."""
+    marker = f"{_SENTINEL}_nonce"
+    assert _parse_sentinel(f"{marker}:not-an-int:/tmp\n", marker) is None
+    assert _parse_sentinel("unrelated output\n", marker) is None
 
 
 def test_complete_from_path(tmp_path: Path) -> None:
