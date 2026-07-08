@@ -126,6 +126,19 @@ def test_parse_sentinel_rejects_prefix_only_match() -> None:
     assert _parse_sentinel(f"{marker}extra:0:/tmp\n", marker) is None
 
 
+def test_parse_sentinel_rejects_malformed_line() -> None:
+    """A line missing the code/cwd fields returns None instead of raising."""
+    marker = new_marker(bash_module._SENTINEL)
+    assert _parse_sentinel(f"{marker}:not-an-int:/tmp\n", marker) is None
+    assert _parse_sentinel("unrelated output\n", marker) is None
+
+
+def test_parse_sentinel_strips_carriage_return() -> None:
+    """A trailing \\r\\n (as from a PTY) does not break the cwd field."""
+    marker = new_marker(bash_module._SENTINEL)
+    assert _parse_sentinel(f"{marker}:0:/tmp\r\n", marker) == (0, "/tmp")
+
+
 async def test_execute_survives_sentinel_lookalike_output(
     shell: BashShell,
 ) -> None:

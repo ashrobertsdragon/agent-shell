@@ -197,7 +197,7 @@ class CmdShell(ProcessBackedShell):
                 f"echo {marker}:%errorlevel%:%cd%\r\n"
             )
             chunks: list[str] = []
-            exit_code = 1
+            exit_code: int
             try:
                 if not proc.stdin:
                     raise ChildProcessError
@@ -212,6 +212,8 @@ class CmdShell(ProcessBackedShell):
                         exit_code, self._cwd = parsed
                         break
                     chunks.append(decoded.replace("\r\n", "\n"))
+                else:
+                    raise ChildProcessError
 
                 stderr_content = Path(stderr_path).read_text(errors="replace")
                 duration_ms = (time.monotonic() - start) * 1000

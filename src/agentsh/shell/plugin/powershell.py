@@ -168,7 +168,7 @@ class PowerShellShell(ProcessBackedShell):
             marker = new_marker(_SENTINEL)
             wrapped = _wrap_command(command, stderr_path, marker)
             chunks: list[str] = []
-            exit_code = 1
+            exit_code: int
             try:
                 if not proc.stdin:
                     raise ChildProcessError
@@ -183,6 +183,8 @@ class PowerShellShell(ProcessBackedShell):
                         exit_code, self._cwd = parsed
                         break
                     chunks.append(decoded)
+                else:
+                    raise ChildProcessError
 
                 stderr_content = Path(stderr_path).read_text(errors="replace")
                 duration_ms = (time.monotonic() - start) * 1000

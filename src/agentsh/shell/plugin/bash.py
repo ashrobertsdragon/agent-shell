@@ -24,7 +24,7 @@ def _parse_sentinel(line: str, marker: str) -> tuple[int, str] | None:
     fields), not a prefix or substring, so command output that merely
     contains sentinel-like text cannot be mistaken for the real one.
     """
-    parts = line.rstrip("\n").split(":", 2)
+    parts = line.rstrip("\r\n").split(":", 2)
     if len(parts) != 3 or parts[0] != marker:
         return None
     try:
@@ -71,7 +71,7 @@ class BashShell(ProcessBackedShell):
                 f'printf "%s:%d:%s\\n" "{marker}" "$__ec__" "$(pwd)"\n'
             )
             chunks: list[str] = []
-            exit_code = 1
+            exit_code: int
             try:
                 if not proc.stdin:
                     raise ChildProcessError
@@ -86,6 +86,8 @@ class BashShell(ProcessBackedShell):
                         exit_code, self._cwd = parsed
                         break
                     chunks.append(decoded)
+                else:
+                    raise ChildProcessError
 
                 stderr_content = Path(stderr_path).read_text(errors="replace")
                 duration_ms = (time.monotonic() - start) * 1000

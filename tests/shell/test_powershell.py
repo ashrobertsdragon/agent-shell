@@ -108,6 +108,13 @@ def test_parse_sentinel_rejects_lookalike_without_matching_marker() -> None:
     assert _parse_sentinel(spoofed, marker) is None
 
 
+def test_parse_sentinel_rejects_malformed_line() -> None:
+    """A line missing the code/cwd fields returns None instead of raising."""
+    marker = f"{_SENTINEL}_nonce"
+    assert _parse_sentinel(f"{marker}:not-an-int:/tmp\n", marker) is None
+    assert _parse_sentinel("unrelated output\n", marker) is None
+
+
 def test_ps_quote_escapes_single_quotes() -> None:
     """Embedded single quotes are doubled inside the quoted literal."""
     assert _ps_quote("it's") == "'it''s'"

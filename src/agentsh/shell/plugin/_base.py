@@ -82,7 +82,12 @@ class ProcessBackedShell(ABC):
             self._desynced = True
 
     async def close(self) -> None:
-        """Terminate the underlying subprocess."""
-        if self._process and self._process.returncode is None:
-            self._process.terminate()
-            await self._process.wait()
+        """Terminate the underlying subprocess.
+
+        Guarded by the same lock as `execute` so a close cannot race a
+        concurrent in-flight command.
+        """
+        async with self._lock:
+            if self._process and self._process.returncode is None:
+                self._process.terminate()
+                await self._process.wait()
