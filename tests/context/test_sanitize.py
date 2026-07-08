@@ -48,10 +48,21 @@ def test_sanitize_escapes_close_tag_case_and_whitespace_variants() -> None:
 
 
 def test_sanitize_caps_length() -> None:
-    """Overlong fragments are truncated to MAX_FRAGMENT_CHARS."""
+    """Overlong fragments are truncated to a hard cap of MAX_FRAGMENT_CHARS.
+
+    The truncation marker counts against the cap rather than being
+    appended on top of it, so callers can rely on max_chars as a true
+    upper bound (e.g. for prompt-size budgets).
+    """
     huge = "a" * (MAX_FRAGMENT_CHARS * 2)
     result = sanitize_context_text(huge)
-    assert len(result) < len(huge)
+    assert len(result) <= MAX_FRAGMENT_CHARS
+
+
+def test_sanitize_caps_length_when_max_chars_smaller_than_marker() -> None:
+    """An unusually small max_chars still yields output no longer than it."""
+    result = sanitize_context_text("a" * 100, max_chars=5)
+    assert len(result) <= 5
 
 
 def test_sanitize_leaves_short_safe_text_unchanged() -> None:
@@ -70,6 +81,22 @@ def test_render_context_fragment_wraps_in_boundary_markers() -> None:
     open_index = rendered.index(CONTEXT_OPEN_TAG)
     close_index = rendered.index(CONTEXT_CLOSE_TAG)
     assert open_index < close_index
+
+
+def test_render_context_fragment_keeps_summary_inside_boundary() -> None:
+    """The summary line -- built from attacker-reachable provider data --
+    is rendered inside the boundary, not as trusted prompt prose before it.
+    """
+    fragment = ContextFragment(
+        provider="git",
+        summary=f"git branch: {INJECTION_PAYLOAD}",
+        payload={"branch": INJECTION_PAYLOAD},
+    )
+    rendered = render_context_fragment(fragment)
+    open_index = rendered.index(CONTEXT_OPEN_TAG)
+    close_index = rendered.index(CONTEXT_CLOSE_TAG)
+    summary_index = rendered.index("git branch:")
+    assert open_index < summary_index < close_index
 
 
 def test_render_context_fragment_neutralizes_malicious_branch_name() -> None:
