@@ -1,6 +1,10 @@
 """Tests for EventBus publish/subscribe ordering and subscriber isolation."""
 
 import asyncio
+import logging
+import time
+
+import pytest
 
 from agentsh.events import CommandFinished, EventBus, ToolDenied
 
@@ -54,3 +58,52 @@ def test_unrelated_event_not_delivered() -> None:
         )
     )
     assert received == []
+
+
+async def test_subscriber_exception_is_logged_not_silently_swallowed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing handler's exception is logged with a traceback, not dropped."""
+    bus = EventBus()
+
+    def bad(e: object) -> None:
+        raise RuntimeError("boom")
+
+    bus.subscribe(CommandFinished, bad)
+    with caplog.at_level(logging.ERROR, logger="agentsh.events"):
+        await bus.publish(
+            CommandFinished(command="echo", exit_code=0, duration_ms=0.1)
+        )
+
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    assert "Unhandled exception in event subscriber" in record.message
+    assert record.exc_info is not None
+    assert "RuntimeError: boom" in caplog.text
+
+
+async def test_slow_subscriber_is_not_currently_bounded_by_a_timeout() -> None:
+    """KNOWN GAP: publish() has no per-subscriber timeout.
+
+    EventBus.publish dispatches subscribers synchronously inline; a
+    slow subscriber blocks the whole publish() call — and, in the REPL
+    hot path, the REPL itself — for as long as it takes. This test
+    pins that current behavior as a documented gap rather than a silent
+    assumption: adding a bounded per-subscriber timeout (e.g. via
+    asyncio.wait_for) would require this test to be rewritten to assert
+    the opposite (that publish() returns in roughly the timeout, not
+    the subscriber's full delay).
+    """
+    bus = EventBus()
+    delay = 0.05
+
+    async def slow(e: object) -> None:
+        await asyncio.sleep(delay)
+
+    bus.subscribe(CommandFinished, slow)
+    start = time.monotonic()
+    await bus.publish(
+        CommandFinished(command="sleep", exit_code=0, duration_ms=0.1)
+    )
+    elapsed = time.monotonic() - start
+    assert elapsed >= delay
