@@ -104,6 +104,26 @@ async def test_run_command_confirm_proceeds_when_callback_approves(
     result = await tool.invoke(command="git commit -m 'x'")
     mock_shell.execute.assert_called_once_with("git commit -m 'x'")
     assert result.stdout == "hello\n"
+    confirm.assert_awaited_once_with(
+        "RunCommand", {"command": "git commit -m 'x'"}
+    )
+
+
+async def test_run_command_allow_wildcard_does_not_bypass_metacharacters(
+    mock_shell: AsyncMock,
+) -> None:
+    """A wildcard allow rule cannot fnmatch its way past a chained command.
+
+    ``RunCommand:git *`` matching ``git; rm -rf /`` would be a shell
+    metacharacter bypass; the engine must force CONFIRM instead, and
+    without a confirm callback the tool refuses to execute it.
+    """
+    rules = PermissionRulesConfig(allow={"RunCommand:git *"})
+    permissions = PermissionEngine(rules)
+    tool = RunCommand(shell=mock_shell, permissions=permissions)
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke(command="git; rm -rf /")
+    mock_shell.execute.assert_not_called()
 
 
 def test_tool_registry_get() -> None:

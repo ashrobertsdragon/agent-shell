@@ -108,6 +108,14 @@ async def run_repl(app: App) -> None:
                     )
                     ui.render(result)
                 except PermissionDeniedError as e:
+                    duration_ms = (time.monotonic() - t0) * 1000
+                    await bus.publish(
+                        CommandFinished(
+                            command=raw,
+                            exit_code=126,
+                            duration_ms=duration_ms,
+                        )
+                    )
                     print(f"[agentsh] {e}", file=sys.stderr)
 
             case InputKind.AGENT:

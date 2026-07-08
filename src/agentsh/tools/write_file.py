@@ -100,18 +100,17 @@ class WriteFile:
             ValueError: if neither content nor patch is supplied, or the
                 patch does not apply cleanly.
         """
-        raw_path = str(kwargs["path"])
         content: str | None = cast(str | None, kwargs.get("content"))
         patch: str | None = cast(str | None, kwargs.get("patch"))
 
         if patch is None and content is None:
             raise ValueError("WriteFile requires either content or patch.")
 
+        path = canonical_path(str(kwargs["path"]))
         await self._permissions.enforce(
-            "WriteFile", {"path": raw_path}, self._confirm
+            "WriteFile", {"path": path.as_posix()}, self._confirm
         )
 
-        path = canonical_path(raw_path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
         if patch is not None:

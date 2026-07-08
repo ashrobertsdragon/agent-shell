@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agentsh.agent_loop import AgentLoopLimitError, run_agent_loop
-from agentsh.events import EventBus
+from agentsh.events import EventBus, ToolDenied
 from agentsh.models import CommandResult, Message, ToolCall
 from agentsh.permissions import PermissionDeniedError, PermissionLevel
 
@@ -174,6 +174,9 @@ async def test_permission_denied_from_tool_injects_error_tool_result(
     )
     registry.get.return_value = tool
 
+    denied_events: list[ToolDenied] = []
+    bus.subscribe(ToolDenied, lambda e: denied_events.append(e))
+
     conversation: list[Message] = [Message(role="user", content="do something")]
     await run_agent_loop(
         agent=agent,
@@ -188,6 +191,8 @@ async def test_permission_denied_from_tool_injects_error_tool_result(
     tool_msg = conversation[-2]
     assert tool_msg.tool_results[0].is_error is True
     assert "denied by user" in tool_msg.tool_results[0].content.lower()
+    assert len(denied_events) == 1
+    assert denied_events[0].tool_name == "RunCommand"
 
 
 async def test_iteration_limit_raises(

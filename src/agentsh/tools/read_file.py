@@ -54,11 +54,10 @@ class ReadFile:
                 required and no confirm callback approves the call.
             FileNotFoundError: if the file does not exist.
         """
-        raw_path = str(kwargs["path"])
+        path = canonical_path(str(kwargs["path"]))
         await self._permissions.enforce(
-            "ReadFile", {"path": raw_path}, self._confirm
+            "ReadFile", {"path": path.as_posix()}, self._confirm
         )
-        path = canonical_path(raw_path)
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
         return path.read_text(encoding="utf-8", errors="replace")
