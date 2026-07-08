@@ -9,9 +9,11 @@ import tempfile
 import time
 from pathlib import Path
 
+from agentsh.limits import read_capped_text
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
 from agentsh.shell.plugin._base import ProcessBackedShell, new_marker
+from agentsh.shell.plugin._stream import read_until_sentinel
 
 _SENTINEL = "__AGENTSH_PS_DONE_8675309__"
 
@@ -167,7 +169,6 @@ class PowerShellShell(ProcessBackedShell):
             start = time.monotonic()
             marker = new_marker(_SENTINEL)
             wrapped = _wrap_command(command, stderr_path, marker)
-            chunks: list[str] = []
             exit_code: int
             try:
                 if not proc.stdin:
@@ -176,28 +177,30 @@ class PowerShellShell(ProcessBackedShell):
                 await proc.stdin.drain()
                 if not proc.stdout:
                     raise ChildProcessError
-                async for line in proc.stdout:
-                    decoded = line.decode(errors="replace")
-                    parsed = _parse_sentinel(decoded, marker)
-                    if parsed is not None:
-                        exit_code, self._cwd = parsed
-                        break
-                    chunks.append(decoded)
-                else:
+                stdout_content, sentinel_line = await read_until_sentinel(
+                    proc.stdout, f"{marker}:"
+                )
+                parsed = (
+                    _parse_sentinel(sentinel_line, marker)
+                    if sentinel_line
+                    else None
+                )
+                if parsed is None:
                     raise ChildProcessError
+                exit_code, self._cwd = parsed
 
-                stderr_content = Path(stderr_path).read_text(errors="replace")
+                stderr_content = read_capped_text(stderr_path)
                 duration_ms = (time.monotonic() - start) * 1000
 
                 return CommandResult(
-                    stdout="".join(chunks),
+                    stdout=stdout_content,
                     stderr=stderr_content,
                     exit_code=exit_code,
                     duration_ms=duration_ms,
                     cwd=self._cwd,
                 )
             except ChildProcessError:
-                stderr_content = Path(stderr_path).read_text(errors="replace")
+                stderr_content = read_capped_text(stderr_path)
                 duration_ms = (time.monotonic() - start) * 1000
                 return CommandResult(
                     stdout="",

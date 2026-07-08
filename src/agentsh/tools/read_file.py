@@ -1,5 +1,6 @@
 """ReadFile tool — reads a file from the filesystem."""
 
+from agentsh.limits import read_capped_text
 from agentsh.models import JsonValue
 from agentsh.permissions import ConfirmCallback, PermissionEngine
 from agentsh.tools import SchemaDict
@@ -49,6 +50,10 @@ class ReadFile:
     async def invoke(self, **kwargs: JsonValue) -> str:
         """Return the file's contents after enforcing permissions.
 
+        Content is capped at MAX_OUTPUT_BYTES so a huge file is truncated
+        with a marker instead of being loaded whole into memory and
+        shipped whole into the LLM prompt.
+
         Raises:
             PermissionDeniedError: if denied by policy, or if CONFIRM is
                 required and no confirm callback approves the call.
@@ -60,4 +65,4 @@ class ReadFile:
         )
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
-        return path.read_text(encoding="utf-8", errors="replace")
+        return read_capped_text(path)

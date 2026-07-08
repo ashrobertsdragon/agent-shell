@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from agentsh.config import PermissionRulesConfig
+from agentsh.limits import MAX_OUTPUT_BYTES, truncation_marker
 from agentsh.models import CommandResult
 from agentsh.permissions import PermissionDeniedError, PermissionEngine
 from agentsh.tools.protocol import ToolRegistry
@@ -41,6 +42,33 @@ async def test_run_command_invokes_shell(
     result = await tool.invoke(command="echo hello")
     mock_shell.execute.assert_called_once_with("echo hello")
     assert result.stdout == "hello\n"
+
+
+async def test_run_command_truncates_oversized_shell_output(
+    allow_all: PermissionEngine,
+) -> None:
+    """invoke re-caps stdout/stderr as defense-in-depth against the shell.
+
+    The Shell backend already caps its own output, but RunCommand must
+    not blindly trust every Shell implementation to do so.
+    """
+    shell = AsyncMock()
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="a" * (MAX_OUTPUT_BYTES + 4096),
+            stderr="b" * (MAX_OUTPUT_BYTES + 4096),
+            exit_code=0,
+            duration_ms=5.0,
+            cwd="/tmp",
+        )
+    )
+    tool = RunCommand(shell=shell, permissions=allow_all)
+    result = await tool.invoke(command="cat huge-file")
+    assert result.stdout.endswith(truncation_marker(MAX_OUTPUT_BYTES))
+    assert result.stderr.endswith(truncation_marker(MAX_OUTPUT_BYTES))
+    assert len(result.stdout.encode()) <= MAX_OUTPUT_BYTES + len(
+        truncation_marker(MAX_OUTPUT_BYTES).encode()
+    )
 
 
 async def test_run_command_deny_raises(mock_shell: AsyncMock) -> None:
