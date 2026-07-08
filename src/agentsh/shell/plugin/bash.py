@@ -6,8 +6,10 @@ import shlex
 import subprocess
 import tempfile
 import time
+import warnings
 from pathlib import Path
 
+from agentsh.history_security import append_secure_line, env_flag_enabled
 from agentsh.limits import read_capped_text
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
@@ -17,6 +19,13 @@ from agentsh.shell.plugin._stream import read_until_sentinel
 _SENTINEL = "__AGENTSH_DONE_8675309__"
 
 _PROMPT_TIMEOUT = 2.0
+
+_HISTFILE_MIRROR_ENV = "AGENTSH_MIRROR_HISTFILE"
+
+
+def _default_history_path() -> Path:
+    """Return agentsh's own bash history file, beside its config."""
+    return Path.home() / ".config" / "agentsh" / "bash_history"
 
 
 def _parse_sentinel(line: str, marker: str) -> tuple[int, str] | None:
@@ -38,6 +47,12 @@ def _parse_sentinel(line: str, marker: str) -> tuple[int, str] | None:
 @register("bash")
 class BashShell(ProcessBackedShell):
     """Wraps a persistent bash subprocess; tracks cwd after every command."""
+
+    def __init__(self) -> None:
+        """Initialise shared process state and agentsh's own history path."""
+        super().__init__()
+        self._history_path = _default_history_path()
+        self._histfile_mirror_warned = False
 
     async def _start_process(self) -> asyncio.subprocess.Process:
         """Start the bash subprocess."""
@@ -131,12 +146,9 @@ class BashShell(ProcessBackedShell):
         return env
 
     async def history(self, limit: int = 100) -> list[str]:
-        """Return lines from $HISTFILE (default ~/.bash_history)."""
-        histfile = os.environ.get(
-            "HISTFILE", str(Path.home() / ".bash_history")
-        )
+        """Return lines from agentsh's own bash history file."""
         try:
-            lines = Path(histfile).read_text().splitlines()
+            lines = self._history_path.read_text().splitlines()
             return lines[-limit:]
         except FileNotFoundError:
             return []
@@ -200,7 +212,35 @@ class BashShell(ProcessBackedShell):
         return prompt or fallback
 
     async def append_history(self, command: str) -> None:
-        """Append command to $HISTFILE (default ~/.bash_history)."""
+        """Append command to agentsh's own hardened history file.
+
+        This is the only sink written by default; bash's own
+        ``$HISTFILE`` is left untouched so agentsh never introduces a
+        second, unhardened copy of plaintext command history. Set
+        ``AGENTSH_MIRROR_HISTFILE=1`` to additionally mirror entries
+        into ``$HISTFILE`` for native bash history integration; doing
+        so duplicates commands (which may contain inline secrets) into
+        a file agentsh does not harden, so a one-time warning is
+        emitted per shell instance when the mirror is active.
+        """
+        try:
+            append_secure_line(self._history_path, command)
+        except OSError:
+            pass
+
+        if not env_flag_enabled(_HISTFILE_MIRROR_ENV):
+            return
+
+        if not self._histfile_mirror_warned:
+            warnings.warn(
+                "AGENTSH_MIRROR_HISTFILE is set: commands are being "
+                "duplicated into $HISTFILE, which agentsh does not "
+                "harden to 0o600; secrets typed at the prompt may be "
+                "persisted there world-readable.",
+                stacklevel=2,
+            )
+            self._histfile_mirror_warned = True
+
         histfile = os.environ.get(
             "HISTFILE", str(Path.home() / ".bash_history")
         )

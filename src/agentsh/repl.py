@@ -12,6 +12,7 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
 
 from agentsh.app import App
+from agentsh.history_security import ensure_secure_file
 from agentsh.models import CommandResult, JsonValue, Message
 
 
@@ -61,9 +62,10 @@ async def run_repl(app: App) -> None:
     )
 
     history_dir = Path.home() / ".local" / "share" / "agentsh"
-    history_dir.mkdir(parents=True, exist_ok=True)
+    history_path = history_dir / "history"
+    ensure_secure_file(history_path)
     session: PromptSession[str] = PromptSession(
-        history=FileHistory(str(history_dir / "history"))
+        history=FileHistory(str(history_path))
     )
     ui = UI(session)
     app.ui = ui

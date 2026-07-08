@@ -7,8 +7,10 @@ import shutil
 import subprocess
 import tempfile
 import time
+import warnings
 from pathlib import Path
 
+from agentsh.history_security import append_secure_line, env_flag_enabled
 from agentsh.limits import read_capped_text
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
@@ -18,6 +20,14 @@ from agentsh.shell.plugin._stream import read_until_sentinel
 _SENTINEL = "__AGENTSH_PS_DONE_8675309__"
 
 _PROMPT_TIMEOUT = 3.0
+
+_PSREADLINE_MIRROR_ENV = "AGENTSH_MIRROR_PSREADLINE_HISTORY"
+
+
+def _default_history_path() -> Path:
+    """Return agentsh's own PowerShell history file, beside its config."""
+    return Path.home() / ".config" / "agentsh" / "powershell_history"
+
 
 _INIT = (
     "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
@@ -126,6 +136,8 @@ class PowerShellShell(ProcessBackedShell):
         """Initialise subprocess state without resolving an executable."""
         super().__init__()
         self._exe: str | None = None
+        self._history_path = _default_history_path()
+        self._psreadline_mirror_warned = False
 
     async def _start_process(self) -> asyncio.subprocess.Process:
         """Start the PowerShell subprocess and apply session init."""
@@ -225,9 +237,9 @@ class PowerShellShell(ProcessBackedShell):
         return env
 
     async def history(self, limit: int = 100) -> list[str]:
-        """Return lines from the default PSReadLine history file."""
+        """Return lines from agentsh's own PowerShell history file."""
         try:
-            lines = _psreadline_history_path().read_text().splitlines()
+            lines = self._history_path.read_text().splitlines()
             return lines[-limit:]
         except FileNotFoundError:
             return []
@@ -313,7 +325,37 @@ class PowerShellShell(ProcessBackedShell):
         return prompt or fallback
 
     async def append_history(self, command: str) -> None:
-        """Append command to the default PSReadLine history file."""
+        """Append command to agentsh's own hardened history file.
+
+        This is the only sink written by default; PowerShell's own
+        PSReadLine ``ConsoleHost_history.txt`` is left untouched so
+        agentsh never introduces a second, unhardened copy of
+        plaintext command history. Set
+        ``AGENTSH_MIRROR_PSREADLINE_HISTORY=1`` to additionally mirror
+        entries there for native PowerShell history integration; doing
+        so duplicates commands (which may contain inline secrets) into
+        a file agentsh does not harden, so a one-time warning is
+        emitted per shell instance when the mirror is active.
+        """
+        try:
+            append_secure_line(self._history_path, command)
+        except OSError:
+            pass
+
+        if not env_flag_enabled(_PSREADLINE_MIRROR_ENV):
+            return
+
+        if not self._psreadline_mirror_warned:
+            warnings.warn(
+                "AGENTSH_MIRROR_PSREADLINE_HISTORY is set: commands "
+                "are being duplicated into PSReadLine's "
+                "ConsoleHost_history.txt, which agentsh does not "
+                "harden to 0o600; secrets typed at the prompt may be "
+                "persisted there world-readable.",
+                stacklevel=2,
+            )
+            self._psreadline_mirror_warned = True
+
         path = _psreadline_history_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
