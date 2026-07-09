@@ -78,7 +78,10 @@ def read_last_lines(path: str | os.PathLike[str], limit: int) -> list[str]:
     over years must not be read in full just to keep the last 20 lines.
 
     Raises FileNotFoundError if path does not exist, matching
-    Path.read_text().
+    Path.read_text(). Unlike Path.read_text() (which raises on invalid
+    UTF-8), decoding here uses errors="replace", consistent with
+    read_capped_text() above: a history file should never crash the
+    shell over one corrupted line.
     """
     if limit <= 0:
         return []
