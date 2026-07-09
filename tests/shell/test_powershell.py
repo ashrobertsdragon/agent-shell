@@ -1,11 +1,15 @@
 """Tests for the PowerShell shell plugin."""
 
+import asyncio
+import re
 import shutil
 import stat
+import subprocess
 import sys
 import warnings
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +23,63 @@ from agentsh.shell.plugin.powershell import (
     _resolve_powershell,
     _wrap_command,
 )
+
+
+class _FakeClock:
+    """Stand-in for the time module yielding preset monotonic ticks."""
+
+    def __init__(self, *ticks: float) -> None:
+        self._ticks = iter(ticks)
+
+    def monotonic(self) -> float:
+        """Return the next preset tick."""
+        return next(self._ticks)
+
+
+class _FakeStdin:
+    """Synthesizes a pwsh-shaped stdout reply for each write.
+
+    execute() writes the base64-wrapped command plus the sentinel-print
+    statement in a single call, then reads stdout until the sentinel
+    line appears. This fake extracts the per-call marker from that
+    write and feeds a canned reply straight into the paired
+    StreamReader, so execute()'s wrapping and sentinel-parsing logic
+    can be exercised without a real pwsh subprocess.
+    """
+
+    def __init__(
+        self,
+        stdout: asyncio.StreamReader,
+        respond: Callable[[str, str], str],
+    ) -> None:
+        self._stdout = stdout
+        self._respond = respond
+
+    def write(self, data: bytes) -> None:
+        """Extract the marker from the write and feed the canned reply."""
+        text = data.decode()
+        match = re.search(rf"{re.escape(_SENTINEL)}_[0-9a-f]+", text)
+        assert match is not None, "wrapped command must embed a marker"
+        self._stdout.feed_data(self._respond(text, match.group(0)).encode())
+
+    async def drain(self) -> None:
+        """No-op: write() already delivered the reply synchronously."""
+
+
+class _FakeProcess:
+    """Stand-in asyncio.subprocess.Process driven by a canned responder."""
+
+    def __init__(self, respond: Callable[[str, str], str]) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.stdin = _FakeStdin(self.stdout, respond)
+        self.returncode: int | None = None
+
+    def kill(self) -> None:
+        """Mark the process as terminated by kill."""
+        self.returncode = -9
+
+    async def wait(self) -> None:
+        """No-op: nothing left to reap."""
 
 
 def test_resolve_prefers_pwsh(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -218,6 +279,149 @@ async def test_append_history_mirrors_to_psreadline_when_env_enabled(
         warnings.simplefilter("error")
         await shell.append_history("Get-Location")
     assert psreadline_file.read_text().count("Get-Location") == 1
+
+
+async def test_execute_full_round_trip_with_stderr() -> None:
+    """execute wraps the command, parses the sentinel, and reads stderr.
+
+    Drives the real execute() implementation against a mocked pwsh
+    subprocess so the base64-wrapping, sentinel-parsing, and
+    stderr-capture logic is validated on any platform, not only on
+    real Windows or a machine with pwsh installed.
+    """
+
+    def respond(wrapped: str, marker: str) -> str:
+        stderr_match = re.search(r"2>>'([^']+)'", wrapped)
+        assert stderr_match is not None
+        Path(stderr_match.group(1)).write_text("oops\n")
+        return f"hello\n{marker}:0:/home/x\n"
+
+    shell = PowerShellShell()
+    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    result = await shell.execute("Write-Output hello")
+    assert result.stdout == "hello\n"
+    assert result.stderr == "oops\n"
+    assert result.exit_code == 0
+    assert result.cwd == "/home/x"
+    assert shell.cwd == "/home/x"
+
+
+async def test_execute_nonzero_exit_code_round_trips() -> None:
+    """A nonzero $LASTEXITCODE from the mocked subprocess is preserved."""
+
+    def respond(wrapped: str, marker: str) -> str:
+        return f"{marker}:3:/home/x\n"
+
+    shell = PowerShellShell()
+    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    result = await shell.execute("exit 3")
+    assert result.exit_code == 3
+
+
+async def test_execute_duration_unit_consistent_on_child_process_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ChildProcessError branch reports duration in milliseconds."""
+    shell = PowerShellShell()
+    shell._process = SimpleNamespace(  # type: ignore[assignment]
+        stdin=None, returncode=None
+    )
+    monkeypatch.setattr(powershell_module, "time", _FakeClock(0.0, 0.5))
+    result = await shell.execute("Get-ChildItem")
+    assert result.duration_ms == 500.0
+    assert result.exit_code == 1
+
+
+async def test_env_parses_name_value_pairs() -> None:
+    """env() splits `Name=Value` lines from the mocked Get-ChildItem env:."""
+
+    def respond(wrapped: str, marker: str) -> str:
+        body = "PATH=/usr/bin\nHOME=/home/x\n"
+        return f"{body}{marker}:0:/home/x\n"
+
+    shell = PowerShellShell()
+    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    env = await shell.env()
+    assert env == {"PATH": "/usr/bin", "HOME": "/home/x"}
+
+
+async def test_complete_returns_completion_matches() -> None:
+    """complete() returns each line of the mocked CommandCompletion output."""
+
+    def respond(wrapped: str, marker: str) -> str:
+        body = "Get-ChildItem\nGet-Command\n"
+        return f"{body}{marker}:0:/home/x\n"
+
+    shell = PowerShellShell()
+    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    matches = await shell.complete("Get-Ch")
+    assert matches == ["Get-ChildItem", "Get-Command"]
+
+
+def _fake_completed_process(
+    returncode: int,
+) -> subprocess.CompletedProcess[bytes]:
+    """Build a minimal CompletedProcess carrying only a returncode."""
+    return subprocess.CompletedProcess(args=[], returncode=returncode)
+
+
+async def test_can_parse_true_when_parser_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """can_parse is True when the mocked parser subprocess exits zero."""
+    monkeypatch.setattr(
+        powershell_module, "_resolve_powershell", lambda: "pwsh"
+    )
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: _fake_completed_process(0)
+    )
+    shell = PowerShellShell()
+    assert await shell.can_parse("Get-ChildItem -Force") is True
+
+
+async def test_can_parse_false_when_parser_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """can_parse is False when the mocked parser subprocess exits nonzero."""
+    monkeypatch.setattr(
+        powershell_module, "_resolve_powershell", lambda: "pwsh"
+    )
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: _fake_completed_process(1)
+    )
+    shell = PowerShellShell()
+    assert await shell.can_parse("if ($x {") is False
+
+
+async def test_can_parse_false_when_powershell_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """can_parse is False (not raising) when no PowerShell is on PATH."""
+
+    def _raise() -> str:
+        raise RuntimeError("no PowerShell executable found")
+
+    monkeypatch.setattr(powershell_module, "_resolve_powershell", _raise)
+    shell = PowerShellShell()
+    assert await shell.can_parse("Get-ChildItem") is False
+
+
+async def test_can_parse_false_on_subprocess_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """can_parse is False when the parser subprocess times out."""
+    monkeypatch.setattr(
+        powershell_module, "_resolve_powershell", lambda: "pwsh"
+    )
+
+    def _raise(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        raise subprocess.TimeoutExpired(cmd="pwsh", timeout=5.0)
+
+    monkeypatch.setattr(subprocess, "run", _raise)
+    shell = PowerShellShell()
+    assert await shell.can_parse("Get-ChildItem") is False
 
 
 requires_pwsh = pytest.mark.skipif(

@@ -1,15 +1,19 @@
 """Tests for the Windows CMD shell plugin."""
 
+import asyncio
 import os
+import re
 import stat
 import subprocess
 import sys
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from agentsh.shell.plugin import cmd as cmd_module
 from agentsh.shell.plugin.cmd import (
     _SENTINEL,
     CmdShell,
@@ -17,6 +21,63 @@ from agentsh.shell.plugin.cmd import (
     _expand_prompt,
     _parse_sentinel,
 )
+
+
+class _FakeClock:
+    """Stand-in for the time module yielding preset monotonic ticks."""
+
+    def __init__(self, *ticks: float) -> None:
+        self._ticks = iter(ticks)
+
+    def monotonic(self) -> float:
+        """Return the next preset tick."""
+        return next(self._ticks)
+
+
+class _FakeStdin:
+    """Synthesizes a cmd.exe-shaped stdout reply for each write.
+
+    execute() writes the wrapped command plus the sentinel-echo line in
+    a single call, then reads stdout until the sentinel line appears.
+    This fake extracts the per-call marker from that write and feeds a
+    canned reply straight into the paired StreamReader, so execute()'s
+    wrapping and sentinel-parsing logic can be exercised without a real
+    cmd.exe subprocess.
+    """
+
+    def __init__(
+        self,
+        stdout: asyncio.StreamReader,
+        respond: Callable[[str, str], str],
+    ) -> None:
+        self._stdout = stdout
+        self._respond = respond
+
+    def write(self, data: bytes) -> None:
+        """Extract the marker from the write and feed the canned reply."""
+        text = data.decode()
+        match = re.search(rf"{re.escape(_SENTINEL)}_[0-9a-f]+", text)
+        assert match is not None, "wrapped command must embed a marker"
+        self._stdout.feed_data(self._respond(text, match.group(0)).encode())
+
+    async def drain(self) -> None:
+        """No-op: write() already delivered the reply synchronously."""
+
+
+class _FakeProcess:
+    """Stand-in asyncio.subprocess.Process driven by a canned responder."""
+
+    def __init__(self, respond: Callable[[str, str], str]) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.stdin = _FakeStdin(self.stdout, respond)
+        self.returncode: int | None = None
+
+    def kill(self) -> None:
+        """Mark the process as terminated by kill."""
+        self.returncode = -9
+
+    async def wait(self) -> None:
+        """No-op: nothing left to reap."""
 
 
 def test_expand_prompt_default() -> None:
@@ -187,6 +248,70 @@ async def test_render_prompt_default(
     shell = CmdShell()
     prompt = await shell.render_prompt()
     assert prompt == f"{shell.cwd}>"
+
+
+async def test_execute_full_round_trip_with_stderr() -> None:
+    """execute wraps the command, parses the sentinel, and reads stderr.
+
+    Drives the real execute() implementation against a mocked cmd.exe
+    subprocess so the wrapping, sentinel-parsing, and stderr-capture
+    logic is validated on any platform, not only on real Windows.
+    """
+
+    def respond(wrapped: str, marker: str) -> str:
+        stderr_match = re.search(r'2>"([^"]+)"', wrapped)
+        assert stderr_match is not None
+        Path(stderr_match.group(1)).write_text("oops\n")
+        return f"hello\r\n{marker}:0:C:\\Users\\x\r\n"
+
+    shell = CmdShell()
+    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    result = await shell.execute("echo hello")
+    assert result.stdout == "hello\n"
+    assert result.stderr == "oops\n"
+    assert result.exit_code == 0
+    assert result.cwd == "C:\\Users\\x"
+    assert shell.cwd == "C:\\Users\\x"
+
+
+async def test_execute_nonzero_exit_code_round_trips() -> None:
+    """A nonzero %errorlevel% from the mocked subprocess is preserved."""
+
+    def respond(wrapped: str, marker: str) -> str:
+        return f"{marker}:1:C:\\Users\\x\r\n"
+
+    shell = CmdShell()
+    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    result = await shell.execute("dir C:\\nonexistent-agentsh-dir")
+    assert result.exit_code == 1
+
+
+async def test_execute_duration_unit_consistent_on_child_process_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ChildProcessError branch reports duration in milliseconds."""
+    shell = CmdShell()
+    shell._process = SimpleNamespace(  # type: ignore[assignment]
+        stdin=None, returncode=None
+    )
+    monkeypatch.setattr(cmd_module, "time", _FakeClock(0.0, 0.5))
+    result = await shell.execute("dir")
+    assert result.duration_ms == 500.0
+    assert result.exit_code == 1
+
+
+async def test_env_parses_set_output_skips_hidden_vars() -> None:
+    """env() skips cmd's hidden `=C:` per-drive vars but keeps the rest."""
+
+    def respond(wrapped: str, marker: str) -> str:
+        body = "COMSPEC=C:\\Windows\\system32\\cmd.exe\r\n=C:=C:\\Users\\x\r\n"
+        return f"{body}{marker}:0:C:\\Users\\x\r\n"
+
+    shell = CmdShell()
+    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    env = await shell.env()
+    assert env["COMSPEC"] == "C:\\Windows\\system32\\cmd.exe"
+    assert not any(k.startswith("=") for k in env)
 
 
 requires_cmd = pytest.mark.skipif(
