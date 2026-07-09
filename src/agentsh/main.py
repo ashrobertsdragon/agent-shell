@@ -14,6 +14,7 @@ from agentsh.models import JsonValue
 from agentsh.permissions import PermissionEngine
 from agentsh.repl import run_repl
 from agentsh.shell import UnsupportedShellError, create_shell
+from agentsh.tools._paths import canonical_path
 from agentsh.tools.protocol import ToolRegistry
 from agentsh.tools.read_file import ReadFile
 from agentsh.tools.run_command import RunCommand
@@ -60,7 +61,14 @@ def _build_app() -> App:
         RunCommand(shell=shell, permissions=permissions, confirm=confirm)
     )
     app.tools.register(ReadFile(permissions=permissions, confirm=confirm))
-    app.tools.register(WriteFile(permissions=permissions, confirm=confirm))
+    write_roots = [canonical_path(root) for root in config.write_roots]
+    app.tools.register(
+        WriteFile(
+            permissions=permissions,
+            confirm=confirm,
+            sandbox_roots=write_roots,
+        )
+    )
 
     return app
 

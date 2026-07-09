@@ -44,3 +44,21 @@ def test_permission_rules_default_empty(tmp_path: Path) -> None:
 def test_load_config_returns_config_type(tmp_path: Path) -> None:
     """load_config always returns a Config instance."""
     assert isinstance(load_config(tmp_path / "missing.toml"), Config)
+
+
+def test_write_roots_default_empty(tmp_path: Path) -> None:
+    """Default config has no sandbox roots (write behavior is unrestricted)."""
+    cfg = load_config(tmp_path / "no.toml")
+    assert cfg.write_roots == []
+
+
+def test_write_roots_loaded_from_file(tmp_path: Path) -> None:
+    """write_roots in the TOML file is parsed into the Config."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        textwrap.dedent("""
+        write_roots = ["/home/user/project", "/tmp/scratch"]
+    """)
+    )
+    cfg = load_config(config_file)
+    assert cfg.write_roots == ["/home/user/project", "/tmp/scratch"]

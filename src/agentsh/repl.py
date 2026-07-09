@@ -15,6 +15,28 @@ from agentsh.app import App
 from agentsh.history_security import ensure_secure_file
 from agentsh.models import CommandResult, JsonValue, Message
 
+_PREVIEW_MAX_CHARS = 2000
+
+
+def _content_preview(arguments: Mapping[str, JsonValue]) -> str | None:
+    """Return a preview of the file content or patch a call would write.
+
+    WriteFile calls carry the full content (or a SEARCH/REPLACE patch) in
+    their arguments; surfacing it here means CONFIRM prompts show what
+    will actually change, not just the target path, so approval isn't
+    blind (issue #21). Returns None for calls with nothing to preview
+    (e.g. RunCommand).
+    """
+    for key in ("content", "patch"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            truncated = value[:_PREVIEW_MAX_CHARS]
+            suffix = (
+                "\n... (truncated)" if len(value) > _PREVIEW_MAX_CHARS else ""
+            )
+            return f"--- {key} preview ---\n{truncated}{suffix}"
+    return None
+
 
 class UI:
     """Handles user-facing I/O: prompts, rendering, and confirmations."""
@@ -41,6 +63,9 @@ class UI:
         """Prompt the user to allow or deny a CONFIRM-level tool call."""
         label = arguments.get("command") or arguments.get("path") or tool_name
         print(f"\n[agentsh] permission required — {tool_name}: {label}")
+        preview = _content_preview(arguments)
+        if preview is not None:
+            print(preview)
         try:
             answer = await self._session.prompt_async("Allow? [y/N] ")
             return answer.strip().lower() == "y"

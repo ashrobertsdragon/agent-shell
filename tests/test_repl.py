@@ -319,6 +319,57 @@ class TestUI:
         session.prompt_async = AsyncMock(side_effect=KeyboardInterrupt())
         assert not await UI(session).confirm("RunCommand", {"command": "ls"})
 
+    async def test_confirm_shows_content_preview_for_write_file(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """WriteFile confirm prompts show the content, not just the path,
+        so approval isn't blind (issue #21).
+        """
+        session = MagicMock()
+        session.prompt_async = AsyncMock(return_value="y")
+        await UI(session).confirm(
+            "WriteFile", {"path": "/tmp/out.txt", "content": "rm -rf /"}
+        )
+        out = capsys.readouterr().out
+        assert "rm -rf /" in out
+
+    async def test_confirm_shows_patch_preview_for_write_file(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """WriteFile confirm prompts preview a patch when content is absent."""
+        session = MagicMock()
+        session.prompt_async = AsyncMock(return_value="y")
+        patch_text = "<<<<<<< SEARCH\nfoo\n=======\nbar\n>>>>>>> REPLACE"
+        await UI(session).confirm(
+            "WriteFile", {"path": "/tmp/out.txt", "patch": patch_text}
+        )
+        out = capsys.readouterr().out
+        assert patch_text in out
+
+    async def test_confirm_truncates_long_preview(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A very large content payload is truncated, not dumped in full."""
+        session = MagicMock()
+        session.prompt_async = AsyncMock(return_value="y")
+        huge = "x" * 10_000
+        await UI(session).confirm(
+            "WriteFile", {"path": "/tmp/out.txt", "content": huge}
+        )
+        out = capsys.readouterr().out
+        assert len(out) < len(huge)
+        assert "truncated" in out
+
+    async def test_confirm_no_preview_for_run_command(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """RunCommand confirms are unaffected: no content/patch to preview."""
+        session = MagicMock()
+        session.prompt_async = AsyncMock(return_value="y")
+        await UI(session).confirm("RunCommand", {"command": "ls -la"})
+        out = capsys.readouterr().out
+        assert "preview" not in out
+
 
 class _FakeShell:
     """Minimal shell double exposing only what run_repl touches pre-loop."""

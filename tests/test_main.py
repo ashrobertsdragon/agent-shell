@@ -1,5 +1,7 @@
 """Tests for the CLI entry point in agentsh.main."""
 
+from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,15 +15,17 @@ from agentsh.config import (
 from agentsh.context.providers import UnknownProviderError
 from agentsh.main import _build_app, main
 from agentsh.shell import UnsupportedShellError
+from agentsh.tools.write_file import WriteFile
 
 
-def _config() -> Config:
+def _config(*, write_roots: list[str] | None = None) -> Config:
     """Build a representative Config for wiring tests."""
     return Config(
         shell="bash",
         agent=AgentConfig(provider="anthropic"),
         context=ContextConfig(providers=["git"], timeout_ms=150),
         permissions=PermissionRulesConfig(allow={"ReadFile:*"}),
+        write_roots=write_roots or [],
     )
 
 
@@ -59,6 +63,27 @@ def test_build_app_wires_dependencies() -> None:
         app.tools.get("ReadFile").name,
         app.tools.get("WriteFile").name,
     } == {"RunCommand", "ReadFile", "WriteFile"}
+
+
+def test_build_app_wires_write_roots_into_write_file_sandbox(
+    tmp_path: Path,
+) -> None:
+    """Config write_roots reach WriteFile as canonicalized sandbox_roots."""
+    root = tmp_path / "workspace"
+    root.mkdir()
+    config = _config(write_roots=[str(root)])
+
+    with (
+        patch("agentsh.main.load_config", return_value=config),
+        patch("agentsh.main.create_shell", return_value=MagicMock()),
+        patch("agentsh.main.build_providers", return_value=[MagicMock()]),
+        patch("agentsh.main.Agent") as mock_agent,
+    ):
+        mock_agent.from_provider.return_value = MagicMock()
+        app = _build_app()
+
+    write_file = cast(WriteFile, app.tools.get("WriteFile"))
+    assert write_file._sandbox_roots == [root.resolve()]
 
 
 def test_main_success_runs_repl() -> None:
