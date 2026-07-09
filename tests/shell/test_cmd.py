@@ -76,6 +76,10 @@ class _FakeProcess:
         """Mark the process as terminated by kill."""
         self.returncode = -9
 
+    def terminate(self) -> None:
+        """Mark the process as terminated, mirroring Process.terminate()."""
+        self.returncode = -15
+
     async def wait(self) -> None:
         """No-op: nothing left to reap."""
 
