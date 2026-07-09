@@ -1,5 +1,6 @@
 """WriteFile tool — writes or patches a file on the filesystem."""
 
+import asyncio
 import re
 from collections.abc import Sequence
 from pathlib import Path
@@ -31,6 +32,23 @@ def _apply_patch(original: str, patch: str) -> str:
             raise ValueError(f"Search text not found in file: {search[:80]!r}")
         result = result.replace(search, replacement, 1)
     return result
+
+
+def _write(path: Path, content: str | None, patch: str | None) -> str:
+    """Blocking mkdir + read/write of the target file, off the event loop."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if patch is not None:
+        original = (
+            path.read_text(encoding="utf-8", errors="replace")
+            if path.exists()
+            else ""
+        )
+        path.write_text(_apply_patch(original, patch), encoding="utf-8")
+    else:
+        path.write_text(content or "", encoding="utf-8")
+
+    return f"Written: {path}"
 
 
 class WriteFile:
@@ -144,16 +162,4 @@ class WriteFile:
             "WriteFile", {"path": path.as_posix()}, self._confirm
         )
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        if patch is not None:
-            original = (
-                path.read_text(encoding="utf-8", errors="replace")
-                if path.exists()
-                else ""
-            )
-            path.write_text(_apply_patch(original, patch), encoding="utf-8")
-        else:
-            path.write_text(content or "", encoding="utf-8")
-
-        return f"Written: {path}"
+        return await asyncio.to_thread(_write, path, content, patch)

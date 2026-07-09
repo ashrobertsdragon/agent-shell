@@ -6,6 +6,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import warnings
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
@@ -426,6 +427,52 @@ async def test_can_parse_false_on_subprocess_timeout(
     monkeypatch.setattr(subprocess, "run", _raise)
     shell = PowerShellShell()
     assert await shell.can_parse("Get-ChildItem") is False
+
+
+async def test_history_read_runs_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """history() reads the own history file via asyncio.to_thread, not inline."""
+    _patch_default_history_path(monkeypatch, tmp_path / "hist.txt")
+    shell = PowerShellShell()
+    await shell.append_history("Get-ChildItem")
+
+    main_thread = threading.current_thread()
+    read_thread: threading.Thread | None = None
+    original_read_last_lines = powershell_module.read_last_lines
+
+    def _spy(path: Path, limit: int) -> list[str]:
+        nonlocal read_thread
+        read_thread = threading.current_thread()
+        return original_read_last_lines(path, limit)
+
+    monkeypatch.setattr(powershell_module, "read_last_lines", _spy)
+    await shell.history()
+
+    assert read_thread is not None
+    assert read_thread is not main_thread
+
+
+async def test_append_history_write_runs_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """append_history's own-file write runs via asyncio.to_thread, not inline."""
+    _patch_default_history_path(monkeypatch, tmp_path / "hist.txt")
+    shell = PowerShellShell()
+    main_thread = threading.current_thread()
+    write_thread: threading.Thread | None = None
+    original = powershell_module.append_secure_line
+
+    def _spy(path: Path, line: str) -> None:
+        nonlocal write_thread
+        write_thread = threading.current_thread()
+        original(path, line)
+
+    monkeypatch.setattr(powershell_module, "append_secure_line", _spy)
+    await shell.append_history("Get-ChildItem")
+
+    assert write_thread is not None
+    assert write_thread is not main_thread
 
 
 requires_pwsh = pytest.mark.skipif(

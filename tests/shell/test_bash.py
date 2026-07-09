@@ -2,6 +2,7 @@
 
 import shlex
 import stat
+import threading
 import warnings
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -298,3 +299,87 @@ async def test_execute_recovers_after_large_output(shell: BashShell) -> None:
     result = await shell.execute("echo after")
     assert result.stdout.strip() == "after"
     assert result.exit_code == 0
+
+
+async def test_execute_stderr_io_runs_off_the_event_loop(
+    shell: BashShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Creating, reading, and deleting the stderr scratch file must not run
+    on the event loop thread, or a single command stalls every other
+    coroutine waiting on the loop (issue #22).
+    """
+    main_thread = threading.current_thread()
+    create_thread: threading.Thread | None = None
+    read_thread: threading.Thread | None = None
+    discard_thread: threading.Thread | None = None
+
+    original_create = bash_module.create_stderr_tempfile
+    original_read = bash_module.read_capped_text
+    original_discard = bash_module.discard_stderr_tempfile
+
+    def _spy_create() -> str:
+        nonlocal create_thread
+        create_thread = threading.current_thread()
+        return original_create()
+
+    def _spy_read(path: str) -> str:
+        nonlocal read_thread
+        read_thread = threading.current_thread()
+        return original_read(path)
+
+    def _spy_discard(path: str) -> None:
+        nonlocal discard_thread
+        discard_thread = threading.current_thread()
+        original_discard(path)
+
+    monkeypatch.setattr(bash_module, "create_stderr_tempfile", _spy_create)
+    monkeypatch.setattr(bash_module, "read_capped_text", _spy_read)
+    monkeypatch.setattr(bash_module, "discard_stderr_tempfile", _spy_discard)
+
+    result = await shell.execute("echo hello")
+
+    assert result.stdout.strip() == "hello"
+    assert create_thread is not None and create_thread is not main_thread
+    assert read_thread is not None and read_thread is not main_thread
+    assert discard_thread is not None and discard_thread is not main_thread
+
+
+async def test_history_read_runs_off_the_event_loop(
+    shell: BashShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """history() reads the history file via asyncio.to_thread, not inline."""
+    main_thread = threading.current_thread()
+    read_thread: threading.Thread | None = None
+    original_read_last_lines = bash_module.read_last_lines
+
+    def _spy(path: Path, limit: int) -> list[str]:
+        nonlocal read_thread
+        read_thread = threading.current_thread()
+        return original_read_last_lines(path, limit)
+
+    await shell.append_history("echo one")
+    monkeypatch.setattr(bash_module, "read_last_lines", _spy)
+    await shell.history()
+
+    assert read_thread is not None
+    assert read_thread is not main_thread
+
+
+async def test_append_history_write_runs_off_the_event_loop(
+    shell: BashShell, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """append_history's own-file write runs via asyncio.to_thread, not inline."""
+    main_thread = threading.current_thread()
+    write_thread: threading.Thread | None = None
+    original = bash_module.append_secure_line
+
+    def _spy(path: Path, line: str) -> None:
+        nonlocal write_thread
+        write_thread = threading.current_thread()
+        original(path, line)
+
+    monkeypatch.setattr(bash_module, "append_secure_line", _spy)
+    await shell.append_history("echo tracked")
+
+    assert write_thread is not None
+    assert write_thread is not main_thread

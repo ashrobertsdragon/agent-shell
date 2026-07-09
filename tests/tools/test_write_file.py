@@ -1,11 +1,13 @@
 """Tests for WriteFile tool."""
 
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from agentsh.config import PermissionRulesConfig
 from agentsh.permissions import PermissionDeniedError, PermissionEngine
+from agentsh.tools import write_file as write_file_module
 from agentsh.tools.write_file import WriteFile
 
 
@@ -21,6 +23,34 @@ async def test_full_write(tmp_path: Path, allow_all: PermissionEngine) -> None:
     tool = WriteFile(permissions=allow_all)
     await tool.invoke(path=str(f), content="new content")
     assert f.read_text() == "new content"
+
+
+async def test_write_runs_off_the_event_loop(
+    tmp_path: Path,
+    allow_all: PermissionEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mkdir + read/write for a WriteFile call must not run on the
+    event loop thread, or a large file stalls every other coroutine
+    waiting on the loop (issue #22).
+    """
+    main_thread = threading.current_thread()
+    write_thread: threading.Thread | None = None
+    original = write_file_module._write
+
+    def _spy(path: Path, content: str | None, patch: str | None) -> str:
+        nonlocal write_thread
+        write_thread = threading.current_thread()
+        return original(path, content, patch)
+
+    monkeypatch.setattr(write_file_module, "_write", _spy)
+    f = tmp_path / "out.txt"
+    tool = WriteFile(permissions=allow_all)
+    await tool.invoke(path=str(f), content="hello")
+
+    assert f.read_text() == "hello"
+    assert write_thread is not None
+    assert write_thread is not main_thread
 
 
 async def test_patch_replaces_block(
