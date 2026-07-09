@@ -1,21 +1,33 @@
 """Bounded, crash-safe readline loop shared by the persistent shell backends.
 
-asyncio.StreamReader.readline() raises ValueError (LimitOverrunError under
-the hood) when a single line exceeds its internal buffer limit -- a
-command that emits one very long line (binary data, minified assets, a
-huge log line) would otherwise crash the whole process. This helper
-swallows that error, records a truncation marker, and keeps reading so
-the sentinel line further down the stream is still reached, keeping the
-shell's request/response protocol in sync for the next command. It also
-caps total buffered output at MAX_OUTPUT_BYTES so a command that emits
-gigabytes of ordinary output cannot exhaust memory or blow up an LLM
-prompt.
+asyncio.StreamReader.readline() wraps readuntil() and, on a
+LimitOverrunError (a single line exceeding the stream's internal buffer
+limit), converts it to a plain ValueError -- but only after clearing the
+*entire* internal buffer when the newline isn't found exactly at the
+overrun boundary, not just the oversized line. That risks silently
+discarding subsequently-arrived data, including the sentinel line itself,
+desyncing the shell's request/response protocol for the next command.
+
+This helper bypasses readline() and calls readuntil() directly, handling
+LimitOverrunError itself: it advances past exactly the reported overrun
+bytes via readexactly() (which readuntil() guarantees are still sitting
+in the buffer) and keeps reading, so no data is ever silently dropped.
+
+It also caps total buffered output at MAX_OUTPUT_BYTES so a command that
+emits gigabytes of ordinary output cannot exhaust memory or blow up an
+LLM prompt, and applies truncate_text() as a final safety net since
+decoding with errors="replace" can inflate byte length past a raw cap.
 """
 
 import asyncio
 from collections.abc import Callable
 
-from agentsh.limits import MAX_OUTPUT_BYTES, truncation_marker
+from agentsh.limits import (
+    MAX_OUTPUT_BYTES,
+    line_overrun_marker,
+    truncate_text,
+    truncation_marker,
+)
 
 
 async def read_until_sentinel(
@@ -38,27 +50,41 @@ async def read_until_sentinel(
         tuple[str, str]: The collected output, and the raw decoded
         sentinel line (empty string if the stream ended first).
     """
+    sentinel_bytes = sentinel_prefix.encode()
     chunks: list[str] = []
+    marker: str | None = None
     total = 0
-    truncated = False
+
+    def finish() -> str:
+        # truncate_text is a safety net on the *kept* content only: the
+        # marker is exempt so a small max_bytes (or decode inflation from
+        # errors="replace") can never chew into the marker text itself.
+        text = truncate_text("".join(chunks), max_bytes)
+        return text + marker if marker else text
+
     while True:
         try:
-            line = await stdout.readline()
-        except ValueError:
-            if not truncated:
-                chunks.append(truncation_marker(max_bytes))
-                truncated = True
+            line = await stdout.readuntil(b"\n")
+        except asyncio.IncompleteReadError as e:
+            line = e.partial
+        except asyncio.LimitOverrunError as e:
+            if marker is None:
+                marker = line_overrun_marker()
+            await stdout.readexactly(e.consumed)
             continue
         if not line:
-            return "".join(chunks), ""
+            return finish(), ""
+        if marker is not None:
+            # Already discarding output: skip the decode unless this line
+            # might be the sentinel we're still watching for.
+            if line.startswith(sentinel_bytes):
+                return finish(), line.decode(errors="replace")
+            continue
         decoded = line.decode(errors="replace")
         if decoded.startswith(sentinel_prefix):
-            return "".join(chunks), decoded
-        if truncated:
-            continue
+            return finish(), decoded
         total += len(line)
         if total > max_bytes:
-            chunks.append(truncation_marker(max_bytes))
-            truncated = True
+            marker = truncation_marker(max_bytes)
             continue
         chunks.append(transform(decoded) if transform else decoded)

@@ -1,10 +1,20 @@
 """ReadFile tool — reads a file from the filesystem."""
 
+import asyncio
+from pathlib import Path
+
 from agentsh.limits import read_capped_text
 from agentsh.models import JsonValue
 from agentsh.permissions import ConfirmCallback, PermissionEngine
 from agentsh.tools import SchemaDict
 from agentsh.tools._paths import canonical_path
+
+
+def _read(path: Path) -> str:
+    """Blocking exists-check + capped read, run off the event loop."""
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+    return read_capped_text(path)
 
 
 class ReadFile:
@@ -63,6 +73,4 @@ class ReadFile:
         await self._permissions.enforce(
             "ReadFile", {"path": path.as_posix()}, self._confirm
         )
-        if not path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-        return read_capped_text(path)
+        return await asyncio.to_thread(_read, path)

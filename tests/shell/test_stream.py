@@ -68,3 +68,36 @@ async def test_transform_applied_only_to_kept_lines() -> None:
     )
     assert output == "a\n"
     assert sentinel == "SENTINEL:0:/tmp\n"
+
+
+async def test_repeated_oversized_lines_produce_a_single_marker() -> None:
+    """Multiple consecutive over-limit lines don't each add their own marker.
+
+    Deterministic reproduction of asyncio's LimitOverrunError (rather than
+    relying on incidental buffering) via a tiny explicit stream limit, with
+    two back-to-back oversized lines before the sentinel.
+    """
+    reader = _reader(
+        b"x" * 200 + b"\n",
+        b"y" * 200 + b"\n",
+        b"SENTINEL:0:/tmp\n",
+        limit=64,
+    )
+    output, sentinel = await read_until_sentinel(reader, "SENTINEL:")
+    assert output.count("output truncated") == 1
+    assert sentinel == "SENTINEL:0:/tmp\n"
+
+
+async def test_transform_not_applied_to_truncated_output() -> None:
+    """transform only runs on lines actually kept; truncated output is
+    replaced wholesale by the marker, never passed through transform.
+    """
+    reader = _reader(b"kept\r\n", b"a" * 100 + b"\r\n", b"SENTINEL:0:/tmp\n")
+    output, sentinel = await read_until_sentinel(
+        reader,
+        "SENTINEL:",
+        max_bytes=10,
+        transform=lambda decoded: decoded.replace("\r\n", "\n"),
+    )
+    assert output == "kept\n" + truncation_marker(10)
+    assert sentinel == "SENTINEL:0:/tmp\n"

@@ -18,6 +18,19 @@ def truncation_marker(max_bytes: int = MAX_OUTPUT_BYTES) -> str:
     return f"\n... [output truncated at {max_bytes} bytes] ...\n"
 
 
+def line_overrun_marker() -> str:
+    """Return the marker for a single line exceeding the stream's own limit.
+
+    Distinct from truncation_marker(): this case is capped by asyncio's
+    internal per-line buffer limit, not by MAX_OUTPUT_BYTES, so claiming
+    the byte-count cap here would misstate the actual cause.
+    """
+    return (
+        "\n... [output truncated: a single line exceeded the internal "
+        "read buffer] ...\n"
+    )
+
+
 def truncate_text(text: str, max_bytes: int = MAX_OUTPUT_BYTES) -> str:
     """Truncate text to at most max_bytes of UTF-8, appending a marker.
 
