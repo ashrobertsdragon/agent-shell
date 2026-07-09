@@ -101,10 +101,19 @@ class WriteFile:
         it must not also grant the tool license to create arbitrary
         directory trees anywhere the process can write. Leaving it unset
         preserves the previous unconfined behavior.
+
+        Each root is re-resolved via canonical_path() here rather than
+        trusting the caller to have already done so, so containment
+        checks stay correct even if a future caller passes a relative,
+        symlinked, or ~-prefixed root.
         """
         self._permissions = permissions
         self._confirm = confirm
-        self._sandbox_roots = list(sandbox_roots) if sandbox_roots else []
+        self._sandbox_roots = (
+            [canonical_path(str(root)) for root in sandbox_roots]
+            if sandbox_roots
+            else []
+        )
 
     async def invoke(self, **kwargs: JsonValue) -> str:
         """Write or patch the file after enforcing permissions.

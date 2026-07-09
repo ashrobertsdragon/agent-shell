@@ -18,6 +18,16 @@ from agentsh.models import CommandResult, JsonValue, Message
 _PREVIEW_MAX_CHARS = 2000
 
 
+def _sanitize_for_terminal(text: str) -> str:
+    r"""Escape control sequences that could spoof or manipulate the terminal.
+
+    Untrusted file content shown in a CONFIRM prompt must not be able to
+    inject ANSI escape sequences (\x1b) or lone carriage returns (\r)
+    that overwrite or disguise the prompt the user is approving.
+    """
+    return text.replace("\x1b", "\\x1b").replace("\r", "\\r")
+
+
 def _content_preview(arguments: Mapping[str, JsonValue]) -> str | None:
     """Return a preview of the file content or patch a call would write.
 
@@ -25,16 +35,22 @@ def _content_preview(arguments: Mapping[str, JsonValue]) -> str | None:
     their arguments; surfacing it here means CONFIRM prompts show what
     will actually change, not just the target path, so approval isn't
     blind (issue #21). Returns None for calls with nothing to preview
-    (e.g. RunCommand).
+    (e.g. RunCommand). An empty content/patch is still previewed
+    explicitly (as "(empty)") since it may carry real meaning (e.g.
+    truncating a file), not just skipped as if there were no payload.
     """
     for key in ("content", "patch"):
         value = arguments.get(key)
-        if isinstance(value, str) and value:
-            truncated = value[:_PREVIEW_MAX_CHARS]
-            suffix = (
-                "\n... (truncated)" if len(value) > _PREVIEW_MAX_CHARS else ""
-            )
-            return f"--- {key} preview ---\n{truncated}{suffix}"
+        if not isinstance(value, str):
+            continue
+        if not value:
+            return f"--- {key} preview ---\n(empty)"
+        sanitized = _sanitize_for_terminal(value)
+        truncated = sanitized[:_PREVIEW_MAX_CHARS]
+        suffix = (
+            "\n... (truncated)" if len(sanitized) > _PREVIEW_MAX_CHARS else ""
+        )
+        return f"--- {key} preview ---\n{truncated}{suffix}"
     return None
 
 

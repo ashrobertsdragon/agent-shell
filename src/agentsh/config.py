@@ -87,7 +87,13 @@ def load_config(path: Path | None = None) -> Config:
         deny=set(perm_raw.get("deny", [])),
     )
 
-    write_roots: list[str] = raw.get("write_roots", [])
+    write_roots_raw = raw.get("write_roots", [])
+    if isinstance(write_roots_raw, str):
+        raise ValueError(
+            "write_roots must be a list of paths, not a bare string "
+            f"(got {write_roots_raw!r}); did you mean [{write_roots_raw!r}]?"
+        )
+    write_roots: list[str] = list(write_roots_raw)
 
     return Config(
         shell=shell,

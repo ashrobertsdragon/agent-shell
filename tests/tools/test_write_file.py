@@ -198,3 +198,103 @@ async def test_no_sandbox_roots_configured_is_unrestricted(
     tool = WriteFile(permissions=allow_all, sandbox_roots=None)
     await tool.invoke(path=str(f), content="new content")
     assert f.read_text() == "new content"
+
+
+async def test_empty_sandbox_roots_list_is_unrestricted(
+    tmp_path: Path, allow_all: PermissionEngine
+) -> None:
+    """An explicit empty list behaves the same as unset (unconfined)."""
+    f = tmp_path / "anywhere" / "out.txt"
+    tool = WriteFile(permissions=allow_all, sandbox_roots=[])
+    await tool.invoke(path=str(f), content="new content")
+    assert f.read_text() == "new content"
+
+
+async def test_write_dotdot_traversal_out_of_sandbox_denied(
+    tmp_path: Path,
+) -> None:
+    """A ../ path that resolves outside the sandbox root is refused.
+
+    canonical_path() resolves the traversal before is_within_roots()
+    checks containment, so the raw path string looking like it's inside
+    the sandbox does not matter -- only where it actually resolves.
+    """
+    sandbox = tmp_path / "workspace"
+    sandbox.mkdir()
+    escaped = tmp_path / "outside.txt"
+    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    tool = WriteFile(permissions=permissions, sandbox_roots=[sandbox])
+
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke(
+            path=str(sandbox / ".." / "outside.txt"), content="escaped"
+        )
+
+    assert not escaped.exists()
+
+
+async def test_write_via_symlink_escaping_sandbox_denied(
+    tmp_path: Path,
+) -> None:
+    """A symlink inside the sandbox pointing outside it is not containment.
+
+    Writing through a symlink whose target resolves outside the sandbox
+    must be refused, since canonical_path() follows the symlink to its
+    real, out-of-bounds target before the containment check runs.
+    """
+    sandbox = tmp_path / "workspace"
+    sandbox.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    link = sandbox / "escape-link"
+    link.symlink_to(outside_dir)
+    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    tool = WriteFile(permissions=permissions, sandbox_roots=[sandbox])
+
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke(path=str(link / "escaped.txt"), content="escaped")
+
+    assert not (outside_dir / "escaped.txt").exists()
+
+
+async def test_write_via_symlink_inside_sandbox_succeeds(
+    tmp_path: Path,
+) -> None:
+    """A symlink whose target also resolves inside the sandbox is allowed."""
+    sandbox = tmp_path / "workspace"
+    sandbox.mkdir()
+    real_dir = sandbox / "real"
+    real_dir.mkdir()
+    link = sandbox / "alias"
+    link.symlink_to(real_dir)
+    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    tool = WriteFile(permissions=permissions, sandbox_roots=[sandbox])
+
+    await tool.invoke(path=str(link / "file.txt"), content="hello")
+
+    assert (real_dir / "file.txt").read_text() == "hello"
+
+
+async def test_sandbox_roots_are_canonicalized_by_the_tool(
+    tmp_path: Path,
+) -> None:
+    """A non-canonical sandbox root (../ segment) is still enforced correctly.
+
+    WriteFile must canonicalize sandbox_roots itself rather than trusting
+    every caller to have already done so.
+    """
+    sandbox = tmp_path / "workspace"
+    sandbox.mkdir()
+    outside = tmp_path / "outside.txt"
+    non_canonical_root = tmp_path / "workspace" / ".." / "workspace"
+    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    tool = WriteFile(
+        permissions=permissions, sandbox_roots=[non_canonical_root]
+    )
+
+    await tool.invoke(path=str(sandbox / "in.txt"), content="hello")
+    assert (sandbox / "in.txt").read_text() == "hello"
+
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke(path=str(outside), content="escaped")
+    assert not outside.exists()

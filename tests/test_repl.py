@@ -370,6 +370,53 @@ class TestUI:
         out = capsys.readouterr().out
         assert "preview" not in out
 
+    async def test_confirm_previews_empty_content_explicitly(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An empty content payload (e.g. truncating a file) is still shown,
+        not silently skipped as if there were nothing to preview.
+        """
+        session = MagicMock()
+        session.prompt_async = AsyncMock(return_value="y")
+        await UI(session).confirm(
+            "WriteFile", {"path": "/tmp/out.txt", "content": ""}
+        )
+        out = capsys.readouterr().out
+        assert "preview" in out
+        assert "(empty)" in out
+
+    async def test_confirm_escapes_ansi_escape_in_preview(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A raw ESC byte in file content cannot inject terminal escapes
+        into the CONFIRM prompt itself.
+        """
+        session = MagicMock()
+        session.prompt_async = AsyncMock(return_value="y")
+        malicious = "\x1b[2J\x1b[Hpretend this is a fresh prompt"
+        await UI(session).confirm(
+            "WriteFile", {"path": "/tmp/out.txt", "content": malicious}
+        )
+        out = capsys.readouterr().out
+        assert "\x1b" not in out
+        assert "\\x1b" in out
+
+    async def test_confirm_escapes_carriage_return_in_preview(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A lone carriage return in file content cannot overwrite the
+        line the CONFIRM prompt is displaying.
+        """
+        session = MagicMock()
+        session.prompt_async = AsyncMock(return_value="y")
+        malicious = "real content\rspoofed: Allow? [y/N] "
+        await UI(session).confirm(
+            "WriteFile", {"path": "/tmp/out.txt", "content": malicious}
+        )
+        out = capsys.readouterr().out
+        assert "\r" not in out
+        assert "\\r" in out
+
 
 class _FakeShell:
     """Minimal shell double exposing only what run_repl touches pre-loop."""
