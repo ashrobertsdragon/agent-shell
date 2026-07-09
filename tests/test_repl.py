@@ -1,9 +1,15 @@
-"""Tests for the REPL main loop (run_repl) and the UI helper class."""
+"""Tests for the REPL main loop (run_repl), the UI helper class, and
+history-file hardening performed during REPL setup.
+"""
 
+import stat
+import sys
+from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from prompt_toolkit import PromptSession
 
 from agentsh.agent_loop import AgentLoopLimitError
 from agentsh.app import App, AppState
@@ -312,3 +318,104 @@ class TestUI:
         session = MagicMock()
         session.prompt_async = AsyncMock(side_effect=KeyboardInterrupt())
         assert not await UI(session).confirm("RunCommand", {"command": "ls"})
+
+
+class _FakeShell:
+    """Minimal shell double exposing only what run_repl touches pre-loop."""
+
+    async def render_prompt(self) -> str:
+        """Return a fixed prompt string."""
+        return "agentsh> "
+
+
+class _FakeApp:
+    """Minimal App double: shell, event_bus, and a settable ui attribute."""
+
+    def __init__(self) -> None:
+        """Wire up a fake shell and an unused async event bus."""
+        self.shell = _FakeShell()
+        self.event_bus = AsyncMock()
+        self.ui = None
+
+
+async def _raise_eof(
+    self: PromptSession[str], *args: object, **kwargs: object
+) -> str:
+    """Stand in for PromptSession.prompt_async, always raising EOFError.
+
+    run_repl catches EOFError and breaks immediately, which lets us
+    exercise the one-time history-file setup that runs before the loop
+    without driving a real interactive prompt.
+    """
+    raise EOFError
+
+
+@pytest.fixture(autouse=True)
+def _no_real_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Redirect Path.home() so run_repl never touches the real home dir."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+
+@pytest.fixture(autouse=True)
+def _prompt_session_raises_eof(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every PromptSession.prompt_async call raise EOFError."""
+    monkeypatch.setattr(PromptSession, "prompt_async", _raise_eof)
+
+
+async def test_run_repl_creates_history_file_with_secure_mode(
+    tmp_path: Path,
+) -> None:
+    """run_repl pre-creates the FileHistory backing file at mode 0o600."""
+    await run_repl(_FakeApp())  # type: ignore[arg-type]
+
+    history_path = tmp_path / ".local" / "share" / "agentsh" / "history"
+    assert history_path.exists()
+    if sys.platform != "win32":
+        assert stat.S_IMODE(history_path.stat().st_mode) == 0o600
+
+
+async def test_run_repl_creates_parent_directories(tmp_path: Path) -> None:
+    """The .local/share/agentsh directory tree is created if missing."""
+    history_dir = tmp_path / ".local" / "share" / "agentsh"
+    assert not history_dir.exists()
+
+    await run_repl(_FakeApp())  # type: ignore[arg-type]
+
+    assert history_dir.is_dir()
+
+
+async def test_run_repl_sets_ui_on_app(tmp_path: Path) -> None:
+    """run_repl wires a UI instance onto app.ui before entering the loop."""
+    app = _FakeApp()
+    assert app.ui is None
+
+    await run_repl(app)  # type: ignore[arg-type]
+
+    assert app.ui is not None
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="unix permission bits are not represented the same way on Windows",
+)
+async def test_run_repl_rehardens_preexisting_loose_history_file(
+    tmp_path: Path,
+) -> None:
+    """A pre-existing, loosely-permissioned history file is re-hardened."""
+    history_dir = tmp_path / ".local" / "share" / "agentsh"
+    history_dir.mkdir(parents=True)
+    history_path = history_dir / "history"
+    history_path.write_text("old-command\n")
+    history_path.chmod(0o644)
+
+    await run_repl(_FakeApp())  # type: ignore[arg-type]
+
+    assert stat.S_IMODE(history_path.stat().st_mode) == 0o600
+    assert history_path.read_text() == "old-command\n"
+
+
+async def test_run_repl_breaks_on_eof_without_looping(tmp_path: Path) -> None:
+    """The loop exits cleanly on EOFError without raising further."""
+    app = _FakeApp()
+    await run_repl(app)  # type: ignore[arg-type]
+    app.event_bus.publish.assert_not_called()

@@ -9,6 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from agentsh.history_security import append_secure_line
 from agentsh.limits import read_capped_text
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
@@ -291,16 +292,16 @@ class CmdShell(ProcessBackedShell):
         return prompt or f"{self._cwd}>"
 
     async def append_history(self, command: str) -> None:
-        """Append command to the own history file, mirroring to clink.
+        """Append command to the own hardened history file, mirroring to clink.
 
-        The clink mirror routes through ``clink history add`` so entries
-        land in clink's master history safely; any clink failure is
-        swallowed.
+        The own history file is created (or re-hardened, if it already
+        exists) with mode 0o600 since it is agentsh's own file and no
+        other program depends on its permissions. The clink mirror
+        routes through ``clink history add`` so entries land in
+        clink's master history safely; any clink failure is swallowed.
         """
         try:
-            self._history_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._history_path, "a") as f:
-                f.write(command + "\n")
+            append_secure_line(self._history_path, command)
         except OSError:
             pass
 

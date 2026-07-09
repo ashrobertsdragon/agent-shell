@@ -1,11 +1,15 @@
 """Tests for the PowerShell shell plugin."""
 
 import shutil
+import stat
+import sys
+import warnings
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
 
+from agentsh.shell.plugin import powershell as powershell_module
 from agentsh.shell.plugin.powershell import (
     _SENTINEL,
     PowerShellShell,
@@ -135,15 +139,21 @@ def test_wrap_command_embeds_supplied_marker() -> None:
     assert f'"{marker}:$__ec' in wrapped
 
 
+def _patch_default_history_path(
+    monkeypatch: pytest.MonkeyPatch, path: Path
+) -> None:
+    """Point agentsh's own PowerShell history file at path."""
+    monkeypatch.setattr(
+        powershell_module, "_default_history_path", lambda: path
+    )
+
+
 async def test_history_round_trip(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """append_history then history round-trips without a subprocess."""
     hist = tmp_path / "sub" / "hist.txt"
-    monkeypatch.setattr(
-        "agentsh.shell.plugin.powershell._psreadline_history_path",
-        lambda: hist,
-    )
+    _patch_default_history_path(monkeypatch, hist)
     shell = PowerShellShell()
     await shell.append_history("Get-ChildItem")
     await shell.append_history("Get-Location")
@@ -155,12 +165,59 @@ async def test_history_missing_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """history returns an empty list when the file does not exist."""
-    monkeypatch.setattr(
-        "agentsh.shell.plugin.powershell._psreadline_history_path",
-        lambda: tmp_path / "missing.txt",
-    )
+    _patch_default_history_path(monkeypatch, tmp_path / "missing.txt")
     shell = PowerShellShell()
     assert await shell.history() == []
+
+
+async def test_append_history_writes_own_secure_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """append_history writes agentsh's own file at mode 0o600."""
+    own_file = tmp_path / "powershell_history"
+    _patch_default_history_path(monkeypatch, own_file)
+    shell = PowerShellShell()
+    await shell.append_history("Get-ChildItem")
+    assert own_file.read_text() == "Get-ChildItem\n"
+    if sys.platform != "win32":
+        assert stat.S_IMODE(own_file.stat().st_mode) == 0o600
+
+
+async def test_append_history_does_not_write_psreadline_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """By default, append_history never touches PSReadLine's history."""
+    _patch_default_history_path(monkeypatch, tmp_path / "own_history")
+    psreadline_file = tmp_path / "ConsoleHost_history.txt"
+    monkeypatch.setattr(
+        powershell_module, "_psreadline_history_path", lambda: psreadline_file
+    )
+    shell = PowerShellShell()
+    await shell.append_history("Get-ChildItem")
+    assert not psreadline_file.exists()
+
+
+async def test_append_history_mirrors_to_psreadline_when_env_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AGENTSH_MIRROR_PSREADLINE_HISTORY=1 mirrors and warns once."""
+    _patch_default_history_path(monkeypatch, tmp_path / "own_history")
+    psreadline_file = tmp_path / "ConsoleHost_history.txt"
+    monkeypatch.setattr(
+        powershell_module, "_psreadline_history_path", lambda: psreadline_file
+    )
+    monkeypatch.setenv("AGENTSH_MIRROR_PSREADLINE_HISTORY", "1")
+    shell = PowerShellShell()
+
+    with pytest.warns(UserWarning, match="AGENTSH_MIRROR_PSREADLINE_HISTORY"):
+        await shell.append_history("Get-ChildItem")
+
+    assert "Get-ChildItem" in psreadline_file.read_text()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        await shell.append_history("Get-Location")
+    assert psreadline_file.read_text().count("Get-Location") == 1
 
 
 requires_pwsh = pytest.mark.skipif(

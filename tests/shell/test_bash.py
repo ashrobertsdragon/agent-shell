@@ -1,11 +1,11 @@
 """Integration tests for BashShell against a real bash subprocess."""
 
-import os
 import shlex
+import stat
+import warnings
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
@@ -27,8 +27,18 @@ class _FakeClock:
 
 
 @pytest.fixture
-async def shell() -> AsyncGenerator[BashShell, None]:
-    """Yield a BashShell and ensure it's closed after each test."""
+async def shell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> AsyncGenerator[BashShell, None]:
+    """Yield a BashShell whose own history file lives under tmp_path.
+
+    Patching _default_history_path here (rather than only in the tests
+    that exercise history directly) keeps every test using this fixture
+    from ever touching the real ~/.config/agentsh/bash_history.
+    """
+    monkeypatch.setattr(
+        bash_module, "_default_history_path", lambda: tmp_path / "bash_history"
+    )
     s = BashShell()
     yield s
     await s.close()
@@ -80,14 +90,53 @@ async def test_render_prompt_returns_nonempty(shell: BashShell) -> None:
     assert len(prompt) > 0
 
 
-async def test_append_history_writes_to_histfile(
+async def test_append_history_does_not_write_histfile_by_default(
+    shell: BashShell, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """By default, append_history never touches $HISTFILE."""
+    histfile = tmp_path / ".bash_history"
+    monkeypatch.setenv("HISTFILE", str(histfile))
+    await shell.append_history("ls -la")
+    assert not histfile.exists()
+
+
+async def test_append_history_writes_own_secure_file(
     shell: BashShell, tmp_path: Path
 ) -> None:
-    """append_history writes to the file pointed to by $HISTFILE."""
-    histfile = str(tmp_path / ".bash_history")
-    with patch.dict(os.environ, {"HISTFILE": histfile}):
+    """append_history writes to agentsh's own history file at mode 0o600."""
+    await shell.append_history("ls -la")
+    own_file = tmp_path / "bash_history"
+    assert own_file.read_text() == "ls -la\n"
+    assert stat.S_IMODE(own_file.stat().st_mode) == 0o600
+
+
+async def test_history_round_trips_through_own_file(
+    shell: BashShell,
+) -> None:
+    """history() reads back what append_history wrote to the own file."""
+    await shell.append_history("echo one")
+    await shell.append_history("echo two")
+    assert await shell.history() == ["echo one", "echo two"]
+    assert await shell.history(limit=1) == ["echo two"]
+
+
+async def test_append_history_mirrors_to_histfile_when_env_enabled(
+    shell: BashShell, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AGENTSH_MIRROR_HISTFILE=1 mirrors into $HISTFILE and warns once."""
+    histfile = tmp_path / ".bash_history"
+    monkeypatch.setenv("HISTFILE", str(histfile))
+    monkeypatch.setenv("AGENTSH_MIRROR_HISTFILE", "1")
+
+    with pytest.warns(UserWarning, match="AGENTSH_MIRROR_HISTFILE"):
         await shell.append_history("ls -la")
-    assert "ls -la" in (tmp_path / ".bash_history").read_text()
+
+    assert "ls -la" in histfile.read_text()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        await shell.append_history("echo again")
+    assert histfile.read_text().count("echo again") == 1
 
 
 async def test_execute_duration_unit_consistent_on_child_process_error(
