@@ -1,6 +1,7 @@
 """EventBus and core event types for cross-cutting observability."""
 
 import inspect
+import logging
 from collections import defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -10,9 +11,17 @@ from agentsh.models import JsonValue
 
 E = TypeVar("E")
 
+logger = logging.getLogger(__name__)
+
 
 class EventBus:
-    """Simple async event bus; subscriber exceptions are swallowed."""
+    """Simple async event bus.
+
+    A subscriber's exception is caught and logged (with traceback)
+    rather than propagated, so one broken subscriber cannot stop
+    delivery to the rest or crash the publish loop — but the failure
+    is observable instead of silently discarded.
+    """
 
     def __init__(self) -> None:
         """Initialize with an empty subscriber registry."""
@@ -29,14 +38,18 @@ class EventBus:
         )
 
     async def publish(self, event: object) -> None:
-        """Deliver event to all subscribers; swallow handler errors."""
+        """Deliver event to all subscribers, logging any handler errors."""
         for handler in self._subscribers[type(event)]:
             try:
                 result = handler(event)
                 if inspect.isawaitable(result):
                     await result
             except Exception:
-                pass
+                logger.exception(
+                    "Unhandled exception in event subscriber %r for %s",
+                    handler,
+                    type(event).__name__,
+                )
 
 
 @dataclass(frozen=True)
