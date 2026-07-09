@@ -97,3 +97,40 @@ async def test_powershell_render_prompt_redirects_stdin(
     shell = PowerShellShell()
     await shell.render_prompt()
     assert spawn.kwargs.get("stdin") == asyncio.subprocess.DEVNULL
+
+
+async def test_powershell_render_prompt_falls_back_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """render_prompt falls back to `PS <cwd>> ` when no PowerShell is found.
+
+    Covers the RuntimeError branch without needing a real pwsh/powershell
+    executable on the test machine.
+    """
+
+    def _raise() -> str:
+        raise RuntimeError("no PowerShell executable found")
+
+    monkeypatch.setattr(ps_module, "_resolve_powershell", _raise)
+    shell = PowerShellShell()
+    prompt = await shell.render_prompt()
+    assert prompt == f"PS {shell.cwd}> "
+
+
+async def test_powershell_render_prompt_falls_back_on_spawn_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """render_prompt falls back when spawning the prompt subprocess fails.
+
+    Covers the OSError branch (e.g. the resolved executable vanished
+    between resolution and spawn) without needing a real subprocess.
+    """
+
+    async def _raise(*args: object, **kwargs: object) -> None:
+        raise OSError("no such file or directory")
+
+    monkeypatch.setattr(ps_module, "_resolve_powershell", lambda: "pwsh")
+    monkeypatch.setattr(ps_module.asyncio, "create_subprocess_exec", _raise)
+    shell = PowerShellShell()
+    prompt = await shell.render_prompt()
+    assert prompt == f"PS {shell.cwd}> "
