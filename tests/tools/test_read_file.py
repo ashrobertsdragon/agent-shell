@@ -4,7 +4,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+
 from agentsh.config import PermissionRulesConfig
+from agentsh.limits import MAX_OUTPUT_BYTES, truncation_marker
 from agentsh.permissions import PermissionDeniedError, PermissionEngine
 from agentsh.tools.read_file import ReadFile
 
@@ -56,6 +58,24 @@ async def test_read_non_ascii_content(
     assert await ReadFile(permissions=allow_all).invoke(path=str(f)) == (
         "café ☕"
     )
+
+
+async def test_read_large_file_is_truncated(
+    tmp_path: Path, allow_all: PermissionEngine
+) -> None:
+    """A file over MAX_OUTPUT_BYTES is truncated with a marker.
+
+    A huge file must never be loaded whole into memory just to be
+    shipped whole into an LLM prompt.
+    """
+    f = tmp_path / "big.txt"
+    with f.open("wb") as fh:
+        fh.write(b"a" * (MAX_OUTPUT_BYTES + 4096))
+    result = await ReadFile(permissions=allow_all).invoke(path=str(f))
+    assert len(result.encode()) <= MAX_OUTPUT_BYTES + len(
+        truncation_marker(MAX_OUTPUT_BYTES).encode()
+    )
+    assert result.endswith(truncation_marker(MAX_OUTPUT_BYTES))
 
 
 async def test_read_deny_raises_without_touching_file(

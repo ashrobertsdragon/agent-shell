@@ -1,5 +1,8 @@
 """RunCommand tool — executes shell commands with permission gating."""
 
+from dataclasses import replace
+
+from agentsh.limits import truncate_text
 from agentsh.models import CommandResult, JsonValue
 from agentsh.permissions import ConfirmCallback, PermissionEngine
 from agentsh.shell.protocol import Shell
@@ -55,6 +58,10 @@ class RunCommand:
     async def invoke(self, **kwargs: JsonValue) -> CommandResult:
         """Execute the given command after enforcing permissions.
 
+        The shell backend already caps its own stdout/stderr, but the
+        result is re-capped here too as defense-in-depth against any
+        Shell implementation that does not.
+
         Raises:
             PermissionDeniedError: if denied by policy, or if CONFIRM is
                 required and no confirm callback approves the call.
@@ -63,4 +70,9 @@ class RunCommand:
         await self._permissions.enforce(
             "RunCommand", {"command": command}, self._confirm
         )
-        return await self._shell.execute(command)
+        result = await self._shell.execute(command)
+        return replace(
+            result,
+            stdout=truncate_text(result.stdout),
+            stderr=truncate_text(result.stderr),
+        )

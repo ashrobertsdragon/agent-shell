@@ -1,9 +1,20 @@
 """ReadFile tool — reads a file from the filesystem."""
 
+import asyncio
+from pathlib import Path
+
+from agentsh.limits import read_capped_text
 from agentsh.models import JsonValue
 from agentsh.permissions import ConfirmCallback, PermissionEngine
 from agentsh.tools import SchemaDict
 from agentsh.tools._paths import canonical_path
+
+
+def _read(path: Path) -> str:
+    """Blocking exists-check + capped read, run off the event loop."""
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+    return read_capped_text(path)
 
 
 class ReadFile:
@@ -49,6 +60,10 @@ class ReadFile:
     async def invoke(self, **kwargs: JsonValue) -> str:
         """Return the file's contents after enforcing permissions.
 
+        Content is capped at MAX_OUTPUT_BYTES so a huge file is truncated
+        with a marker instead of being loaded whole into memory and
+        shipped whole into the LLM prompt.
+
         Raises:
             PermissionDeniedError: if denied by policy, or if CONFIRM is
                 required and no confirm callback approves the call.
@@ -58,6 +73,4 @@ class ReadFile:
         await self._permissions.enforce(
             "ReadFile", {"path": path.as_posix()}, self._confirm
         )
-        if not path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-        return path.read_text(encoding="utf-8", errors="replace")
+        return await asyncio.to_thread(_read, path)

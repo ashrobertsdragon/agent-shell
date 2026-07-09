@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from agentsh.limits import MAX_OUTPUT_BYTES, truncation_marker
 from agentsh.shell.plugin import bash as bash_module
 from agentsh.shell.plugin._base import new_marker
 from agentsh.shell.plugin.bash import BashShell, _parse_sentinel
@@ -182,3 +183,69 @@ async def test_reset_kills_process_and_forces_restart(
     second = await shell.process
     assert second is not first
     assert second.returncode is None
+
+
+async def test_execute_single_oversized_line_does_not_crash(
+    shell: BashShell,
+) -> None:
+    """A line beyond asyncio's internal readline limit is truncated, not fatal.
+
+    asyncio.StreamReader.readline() raises ValueError for a single line
+    longer than its internal buffer; without handling that, this would
+    propagate out of execute() uncaught.
+    """
+    result = await shell.execute(
+        "python3 -c \"import sys; sys.stdout.write('x' * 70000)\""
+    )
+    assert result.exit_code == 0
+    assert "output truncated" in result.stdout
+
+
+async def test_execute_recovers_after_oversized_line(
+    shell: BashShell,
+) -> None:
+    """The sentinel protocol stays in sync after an oversized line.
+
+    A truncated/crashed read must not desync the shell such that the
+    next command reads garbage or hangs.
+    """
+    await shell.execute(
+        "python3 -c \"import sys; sys.stdout.write('x' * 70000)\""
+    )
+    result = await shell.execute("echo after")
+    assert result.stdout.strip() == "after"
+    assert result.exit_code == 0
+
+
+async def test_execute_caps_output_over_one_megabyte(
+    shell: BashShell,
+) -> None:
+    """Output beyond MAX_OUTPUT_BYTES is truncated with a marker.
+
+    A command emitting several megabytes of ordinary line-based output
+    must not be buffered whole into memory or the returned stdout.
+    """
+    result = await shell.execute(
+        'python3 -c "'
+        "import sys\n"
+        "for _ in range(2000): sys.stdout.write('y' * 1000 + chr(10))"
+        '"'
+    )
+    assert result.exit_code == 0
+    assert len(result.stdout.encode()) <= MAX_OUTPUT_BYTES + len(
+        truncation_marker(MAX_OUTPUT_BYTES).encode()
+    )
+    assert truncation_marker(MAX_OUTPUT_BYTES) in result.stdout
+
+
+async def test_execute_recovers_after_large_output(shell: BashShell) -> None:
+    """The shell stays usable after a command truncated for size."""
+    await shell.execute(
+        'python3 -c "'
+        "import sys\n"
+        "for _ in range(2000): sys.stdout.write('y' * 1000 + chr(10))"
+        '"'
+    )
+    result = await shell.execute("echo after")
+    assert result.stdout.strip() == "after"
+    assert result.exit_code == 0
