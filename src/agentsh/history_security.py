@@ -20,6 +20,8 @@ HISTORY_FILE_MODE = 0o600
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
+_SUPPORTS_FCHMOD = hasattr(os, "fchmod")
+
 
 def env_flag_enabled(name: str) -> bool:
     """Return True if the named environment variable is set truthy."""
@@ -31,6 +33,9 @@ def _open_secure(path: Path) -> int:
 
     Also re-hardens the mode of a pre-existing file, so files created
     by an older, unhardened version of agentsh get fixed on next write.
+    Windows has no fchmod (and no unix-style permission bits to harden
+    in the first place), so the re-hardening step is skipped there
+    rather than raising.
 
     Returns:
         int: A raw file descriptor opened O_APPEND | O_WRONLY.
@@ -39,18 +44,24 @@ def _open_secure(path: Path) -> int:
     fd = os.open(
         path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, HISTORY_FILE_MODE
     )
-    try:
-        os.fchmod(fd, HISTORY_FILE_MODE)
-    except OSError:
-        os.close(fd)
-        raise
+    if _SUPPORTS_FCHMOD:
+        try:
+            os.fchmod(fd, HISTORY_FILE_MODE)
+        except OSError:
+            os.close(fd)
+            raise
     return fd
 
 
 def append_secure_line(path: Path, line: str) -> None:
     """Append line plus a trailing newline to path, hardened on write."""
     fd = _open_secure(path)
-    with os.fdopen(fd, "a") as f:
+    try:
+        f = os.fdopen(fd, "a")
+    except OSError:
+        os.close(fd)
+        raise
+    with f:
         f.write(line + "\n")
 
 

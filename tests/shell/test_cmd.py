@@ -3,6 +3,7 @@
 import os
 import stat
 import subprocess
+import sys
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -128,7 +129,9 @@ async def test_append_history_writes_own_secure_file(
     shell = _make_shell(monkeypatch, tmp_path, clink=None)
     await shell.append_history("dir")
     own_file = tmp_path / "agentsh" / "cmd_history"
-    assert stat.S_IMODE(own_file.stat().st_mode) == 0o600
+    assert own_file.read_text() == "dir\n"
+    if sys.platform != "win32":
+        assert stat.S_IMODE(own_file.stat().st_mode) == 0o600
 
 
 async def test_append_history_mirrors_to_clink(

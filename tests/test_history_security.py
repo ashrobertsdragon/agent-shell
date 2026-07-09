@@ -1,9 +1,15 @@
 """Tests for history file hardening helpers in history_security."""
 
 import stat
+import sys
 from pathlib import Path
 
 import pytest
+
+_skip_on_windows = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="unix permission bits are not represented the same way on Windows",
+)
 
 from agentsh.history_security import (
     HISTORY_FILE_MODE,
@@ -21,6 +27,7 @@ def _mode(path: Path) -> int:
 class TestAppendSecureLine:
     """Tests for append_secure_line."""
 
+    @_skip_on_windows
     def test_creates_file_with_secure_mode(self, tmp_path: Path) -> None:
         """A freshly created file is mode 0o600."""
         target = tmp_path / "hist"
@@ -50,6 +57,7 @@ class TestAppendSecureLine:
         assert target.exists()
         assert target.read_text() == "echo hi\n"
 
+    @_skip_on_windows
     def test_rehardens_preexisting_loose_permissions(
         self, tmp_path: Path
     ) -> None:
@@ -68,6 +76,7 @@ class TestAppendSecureLine:
 class TestEnsureSecureFile:
     """Tests for ensure_secure_file."""
 
+    @_skip_on_windows
     def test_creates_empty_file_with_secure_mode(self, tmp_path: Path) -> None:
         """A fresh file is created empty and mode 0o600."""
         target = tmp_path / "hist"
@@ -82,6 +91,7 @@ class TestEnsureSecureFile:
         ensure_secure_file(target)
         assert target.exists()
 
+    @_skip_on_windows
     def test_rehardens_preexisting_loose_permissions(
         self, tmp_path: Path
     ) -> None:

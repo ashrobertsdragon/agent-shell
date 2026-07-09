@@ -3,6 +3,7 @@ history-file hardening performed during REPL setup.
 """
 
 import stat
+import sys
 from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -369,7 +370,8 @@ async def test_run_repl_creates_history_file_with_secure_mode(
 
     history_path = tmp_path / ".local" / "share" / "agentsh" / "history"
     assert history_path.exists()
-    assert stat.S_IMODE(history_path.stat().st_mode) == 0o600
+    if sys.platform != "win32":
+        assert stat.S_IMODE(history_path.stat().st_mode) == 0o600
 
 
 async def test_run_repl_creates_parent_directories(tmp_path: Path) -> None:
@@ -392,6 +394,10 @@ async def test_run_repl_sets_ui_on_app(tmp_path: Path) -> None:
     assert app.ui is not None
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="unix permission bits are not represented the same way on Windows",
+)
 async def test_run_repl_rehardens_preexisting_loose_history_file(
     tmp_path: Path,
 ) -> None:

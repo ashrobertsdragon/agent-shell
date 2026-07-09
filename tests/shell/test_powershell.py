@@ -2,6 +2,7 @@
 
 import shutil
 import stat
+import sys
 import warnings
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -178,7 +179,8 @@ async def test_append_history_writes_own_secure_file(
     shell = PowerShellShell()
     await shell.append_history("Get-ChildItem")
     assert own_file.read_text() == "Get-ChildItem\n"
-    assert stat.S_IMODE(own_file.stat().st_mode) == 0o600
+    if sys.platform != "win32":
+        assert stat.S_IMODE(own_file.stat().st_mode) == 0o600
 
 
 async def test_append_history_does_not_write_psreadline_by_default(
