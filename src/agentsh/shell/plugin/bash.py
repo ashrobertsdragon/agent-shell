@@ -10,7 +10,7 @@ import warnings
 from pathlib import Path
 
 from agentsh.history_security import append_secure_line, env_flag_enabled
-from agentsh.limits import read_capped_text
+from agentsh.limits import read_capped_text, read_last_lines
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
 from agentsh.shell.plugin._base import ProcessBackedShell, new_marker
@@ -146,10 +146,9 @@ class BashShell(ProcessBackedShell):
         return env
 
     async def history(self, limit: int = 100) -> list[str]:
-        """Return lines from agentsh's own bash history file."""
+        """Return the last `limit` lines of agentsh's own bash history file."""
         try:
-            lines = self._history_path.read_text().splitlines()
-            return lines[-limit:]
+            return read_last_lines(self._history_path, limit)
         except FileNotFoundError:
             return []
 

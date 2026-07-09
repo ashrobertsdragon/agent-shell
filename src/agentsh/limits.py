@@ -63,3 +63,41 @@ def read_capped_text(
     return data[:max_bytes].decode("utf-8", errors=errors) + truncation_marker(
         max_bytes
     )
+
+
+_TAIL_CHUNK_BYTES = 8192
+
+
+def read_last_lines(path: str | os.PathLike[str], limit: int) -> list[str]:
+    """Return up to the last `limit` lines of path without a full read.
+
+    Seeks backward from the end of the file in fixed-size chunks and
+    stops as soon as `limit` newlines have been seen (or the start of
+    the file is reached), so cost scales with the requested tail size
+    rather than the file's total length -- a history file accumulated
+    over years must not be read in full just to keep the last 20 lines.
+
+    Raises FileNotFoundError if path does not exist, matching
+    Path.read_text(). Unlike Path.read_text() (which raises on invalid
+    UTF-8), decoding here uses errors="replace", consistent with
+    read_capped_text() above: a history file should never crash the
+    shell over one corrupted line.
+    """
+    if limit <= 0:
+        return []
+
+    with Path(path).open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        newline_count = 0
+        chunks: list[bytes] = []
+        while pos > 0 and newline_count <= limit:
+            read_size = min(_TAIL_CHUNK_BYTES, pos)
+            pos -= read_size
+            f.seek(pos)
+            chunk = f.read(read_size)
+            newline_count += chunk.count(b"\n")
+            chunks.append(chunk)
+
+    data = b"".join(reversed(chunks))
+    return data.decode("utf-8", errors="replace").splitlines()[-limit:]
