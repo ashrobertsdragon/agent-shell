@@ -43,7 +43,14 @@ class PermissionRulesConfig:
 
 @dataclass
 class Config:
-    """Top-level application configuration."""
+    """Top-level application configuration.
+
+    write_roots is a directory allowlist enforced inside WriteFile itself
+    (see tools/write_file.py), independent of the permissions rules
+    below: it confines writes even when a rule ALLOWs or an interactive
+    CONFIRM approves the call. An empty list (the default) leaves writes
+    unconfined, matching prior behavior.
+    """
 
     shell: str = "auto"
     agent: AgentConfig = field(default_factory=AgentConfig)
@@ -51,6 +58,7 @@ class Config:
     permissions: PermissionRulesConfig = field(
         default_factory=PermissionRulesConfig
     )
+    write_roots: list[str] = field(default_factory=list)
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -79,6 +87,18 @@ def load_config(path: Path | None = None) -> Config:
         deny=set(perm_raw.get("deny", [])),
     )
 
+    write_roots_raw = raw.get("write_roots", [])
+    if isinstance(write_roots_raw, str):
+        raise ValueError(
+            "write_roots must be a list of paths, not a bare string "
+            f"(got {write_roots_raw!r}); did you mean [{write_roots_raw!r}]?"
+        )
+    write_roots: list[str] = list(write_roots_raw)
+
     return Config(
-        shell=shell, agent=agent, context=context, permissions=permissions
+        shell=shell,
+        agent=agent,
+        context=context,
+        permissions=permissions,
+        write_roots=write_roots,
     )

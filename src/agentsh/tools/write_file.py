@@ -1,12 +1,18 @@
 """WriteFile tool — writes or patches a file on the filesystem."""
 
 import re
+from collections.abc import Sequence
+from pathlib import Path
 from typing import cast
 
 from agentsh.models import JsonValue
-from agentsh.permissions import ConfirmCallback, PermissionEngine
+from agentsh.permissions import (
+    ConfirmCallback,
+    PermissionDeniedError,
+    PermissionEngine,
+)
 from agentsh.tools import SchemaDict
-from agentsh.tools._paths import canonical_path
+from agentsh.tools._paths import canonical_path, is_within_roots
 
 _BLOCK_RE = re.compile(
     r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE",
@@ -82,21 +88,40 @@ class WriteFile:
         self,
         permissions: PermissionEngine,
         confirm: ConfirmCallback | None = None,
+        sandbox_roots: Sequence[Path] | None = None,
     ) -> None:
         """Initialise with a mandatory PermissionEngine.
 
         confirm is awaited for CONFIRM-level paths; if None, such writes
         are refused rather than silently applied.
+
+        sandbox_roots, if given, confines every write to those directory
+        trees regardless of what the PermissionEngine allows: a broad
+        allow rule (or an approved CONFIRM) only clears the policy gate,
+        it must not also grant the tool license to create arbitrary
+        directory trees anywhere the process can write. Leaving it unset
+        preserves the previous unconfined behavior.
+
+        Each root is re-resolved via canonical_path() here rather than
+        trusting the caller to have already done so, so containment
+        checks stay correct even if a future caller passes a relative,
+        symlinked, or ~-prefixed root.
         """
         self._permissions = permissions
         self._confirm = confirm
+        self._sandbox_roots = (
+            [canonical_path(str(root)) for root in sandbox_roots]
+            if sandbox_roots
+            else []
+        )
 
     async def invoke(self, **kwargs: JsonValue) -> str:
         """Write or patch the file after enforcing permissions.
 
         Raises:
-            PermissionDeniedError: if denied by policy, or if CONFIRM is
-                required and no confirm callback approves the call.
+            PermissionDeniedError: if denied by policy, if CONFIRM is
+                required and no confirm callback approves the call, or if
+                sandbox_roots is configured and the path falls outside it.
             ValueError: if neither content nor patch is supplied, or the
                 patch does not apply cleanly.
         """
@@ -107,6 +132,14 @@ class WriteFile:
             raise ValueError("WriteFile requires either content or patch.")
 
         path = canonical_path(str(kwargs["path"]))
+
+        if self._sandbox_roots and not is_within_roots(
+            path, self._sandbox_roots
+        ):
+            raise PermissionDeniedError(
+                f"WriteFile denied: {path} is outside the allowed sandbox roots"
+            )
+
         await self._permissions.enforce(
             "WriteFile", {"path": path.as_posix()}, self._confirm
         )

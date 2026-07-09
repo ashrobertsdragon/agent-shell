@@ -15,6 +15,44 @@ from agentsh.app import App
 from agentsh.history_security import ensure_secure_file
 from agentsh.models import CommandResult, JsonValue, Message
 
+_PREVIEW_MAX_CHARS = 2000
+
+
+def _sanitize_for_terminal(text: str) -> str:
+    r"""Escape control sequences that could spoof or manipulate the terminal.
+
+    Untrusted file content shown in a CONFIRM prompt must not be able to
+    inject ANSI escape sequences (\x1b) or lone carriage returns (\r)
+    that overwrite or disguise the prompt the user is approving.
+    """
+    return text.replace("\x1b", "\\x1b").replace("\r", "\\r")
+
+
+def _content_preview(arguments: Mapping[str, JsonValue]) -> str | None:
+    """Return a preview of the file content or patch a call would write.
+
+    WriteFile calls carry the full content (or a SEARCH/REPLACE patch) in
+    their arguments; surfacing it here means CONFIRM prompts show what
+    will actually change, not just the target path, so approval isn't
+    blind (issue #21). Returns None for calls with nothing to preview
+    (e.g. RunCommand). An empty content/patch is still previewed
+    explicitly (as "(empty)") since it may carry real meaning (e.g.
+    truncating a file), not just skipped as if there were no payload.
+    """
+    for key in ("content", "patch"):
+        value = arguments.get(key)
+        if not isinstance(value, str):
+            continue
+        if not value:
+            return f"--- {key} preview ---\n(empty)"
+        sanitized = _sanitize_for_terminal(value)
+        truncated = sanitized[:_PREVIEW_MAX_CHARS]
+        suffix = (
+            "\n... (truncated)" if len(sanitized) > _PREVIEW_MAX_CHARS else ""
+        )
+        return f"--- {key} preview ---\n{truncated}{suffix}"
+    return None
+
 
 class UI:
     """Handles user-facing I/O: prompts, rendering, and confirmations."""
@@ -41,6 +79,9 @@ class UI:
         """Prompt the user to allow or deny a CONFIRM-level tool call."""
         label = arguments.get("command") or arguments.get("path") or tool_name
         print(f"\n[agentsh] permission required — {tool_name}: {label}")
+        preview = _content_preview(arguments)
+        if preview is not None:
+            print(preview)
         try:
             answer = await self._session.prompt_async("Allow? [y/N] ")
             return answer.strip().lower() == "y"
