@@ -4,7 +4,6 @@ import asyncio
 import os
 import shlex
 import subprocess
-import tempfile
 import time
 import warnings
 from pathlib import Path
@@ -14,6 +13,10 @@ from agentsh.limits import read_capped_text, read_last_lines
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
 from agentsh.shell.plugin._base import ProcessBackedShell, new_marker
+from agentsh.shell.plugin._stderr_file import (
+    create_stderr_tempfile,
+    discard_stderr_tempfile,
+)
 from agentsh.shell.plugin._stream import read_until_sentinel
 
 _SENTINEL = "__AGENTSH_DONE_8675309__"
@@ -26,6 +29,12 @@ _HISTFILE_MIRROR_ENV = "AGENTSH_MIRROR_HISTFILE"
 def _default_history_path() -> Path:
     """Return agentsh's own bash history file, beside its config."""
     return Path.home() / ".config" / "agentsh" / "bash_history"
+
+
+def _append_line(path: str, line: str) -> None:
+    """Append line plus a trailing newline to path, off the event loop."""
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
 
 def _parse_sentinel(line: str, marker: str) -> tuple[int, str] | None:
@@ -80,8 +89,7 @@ class BashShell(ProcessBackedShell):
         async with self._lock:
             proc = await self.process
 
-            fd, stderr_path = tempfile.mkstemp(prefix="agentsh_stderr_")
-            os.close(fd)
+            stderr_path = await asyncio.to_thread(create_stderr_tempfile)
 
             start = time.monotonic()
             marker = new_marker(_SENTINEL)
@@ -112,7 +120,9 @@ class BashShell(ProcessBackedShell):
                     raise ChildProcessError
                 exit_code, self._cwd = parsed
 
-                stderr_content = read_capped_text(stderr_path)
+                stderr_content = await asyncio.to_thread(
+                    read_capped_text, stderr_path
+                )
                 duration_ms = (time.monotonic() - start) * 1000
 
                 return CommandResult(
@@ -123,7 +133,9 @@ class BashShell(ProcessBackedShell):
                     cwd=self._cwd,
                 )
             except ChildProcessError:
-                stderr_content = read_capped_text(stderr_path)
+                stderr_content = await asyncio.to_thread(
+                    read_capped_text, stderr_path
+                )
                 duration_ms = (time.monotonic() - start) * 1000
                 return CommandResult(
                     stdout="",
@@ -133,7 +145,7 @@ class BashShell(ProcessBackedShell):
                     cwd=self._cwd,
                 )
             finally:
-                Path(stderr_path).unlink(missing_ok=True)
+                await asyncio.to_thread(discard_stderr_tempfile, stderr_path)
 
     async def env(self) -> dict[str, str]:
         """Return the subprocess environment by running env."""
@@ -148,7 +160,9 @@ class BashShell(ProcessBackedShell):
     async def history(self, limit: int = 100) -> list[str]:
         """Return the last `limit` lines of agentsh's own bash history file."""
         try:
-            return read_last_lines(self._history_path, limit)
+            return await asyncio.to_thread(
+                read_last_lines, self._history_path, limit
+            )
         except FileNotFoundError:
             return []
 
@@ -223,7 +237,9 @@ class BashShell(ProcessBackedShell):
         emitted per shell instance when the mirror is active.
         """
         try:
-            append_secure_line(self._history_path, command)
+            await asyncio.to_thread(
+                append_secure_line, self._history_path, command
+            )
         except OSError:
             pass
 
@@ -244,7 +260,6 @@ class BashShell(ProcessBackedShell):
             "HISTFILE", str(Path.home() / ".bash_history")
         )
         try:
-            with open(histfile, "a") as f:
-                f.write(command + "\n")
+            await asyncio.to_thread(_append_line, histfile, command)
         except OSError:
             pass

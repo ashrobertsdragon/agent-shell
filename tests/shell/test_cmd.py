@@ -6,6 +6,7 @@ import re
 import stat
 import subprocess
 import sys
+import threading
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -226,6 +227,50 @@ async def test_clink_failure_swallowed(
     )
     await shell.append_history("dir")
     assert (tmp_path / "agentsh" / "cmd_history").read_text() == "dir\n"
+
+
+async def test_history_read_runs_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """history() reads the own history file via asyncio.to_thread, not inline."""
+    shell = _make_shell(monkeypatch, tmp_path, clink=None)
+    await shell.append_history("dir")
+
+    main_thread = threading.current_thread()
+    read_thread: threading.Thread | None = None
+    original_read_last_lines = cmd_module.read_last_lines
+
+    def _spy(path: Path, limit: int) -> list[str]:
+        nonlocal read_thread
+        read_thread = threading.current_thread()
+        return original_read_last_lines(path, limit)
+
+    monkeypatch.setattr(cmd_module, "read_last_lines", _spy)
+    await shell.history()
+
+    assert read_thread is not None
+    assert read_thread is not main_thread
+
+
+async def test_append_history_write_runs_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """append_history's own-file write runs via asyncio.to_thread, not inline."""
+    shell = _make_shell(monkeypatch, tmp_path, clink=None)
+    main_thread = threading.current_thread()
+    write_thread: threading.Thread | None = None
+    original = cmd_module.append_secure_line
+
+    def _spy(path: Path, line: str) -> None:
+        nonlocal write_thread
+        write_thread = threading.current_thread()
+        original(path, line)
+
+    monkeypatch.setattr(cmd_module, "append_secure_line", _spy)
+    await shell.append_history("dir")
+
+    assert write_thread is not None
+    assert write_thread is not main_thread
 
 
 async def test_can_parse_always_true() -> None:

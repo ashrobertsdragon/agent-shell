@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -14,6 +13,10 @@ from agentsh.limits import read_capped_text, read_last_lines
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
 from agentsh.shell.plugin._base import ProcessBackedShell, new_marker
+from agentsh.shell.plugin._stderr_file import (
+    create_stderr_tempfile,
+    discard_stderr_tempfile,
+)
 from agentsh.shell.plugin._stream import read_until_sentinel
 
 _SENTINEL = "__AGENTSH_CMD_DONE_8675309__"
@@ -195,8 +198,7 @@ class CmdShell(ProcessBackedShell):
         async with self._lock:
             proc = await self.process
 
-            fd, stderr_path = tempfile.mkstemp(prefix="agentsh_stderr_")
-            os.close(fd)
+            stderr_path = await asyncio.to_thread(create_stderr_tempfile)
 
             start = time.monotonic()
             marker = new_marker(_SENTINEL)
@@ -226,7 +228,9 @@ class CmdShell(ProcessBackedShell):
                     raise ChildProcessError
                 exit_code, self._cwd = parsed
 
-                stderr_content = read_capped_text(stderr_path)
+                stderr_content = await asyncio.to_thread(
+                    read_capped_text, stderr_path
+                )
                 duration_ms = (time.monotonic() - start) * 1000
 
                 return CommandResult(
@@ -237,7 +241,9 @@ class CmdShell(ProcessBackedShell):
                     cwd=self._cwd,
                 )
             except ChildProcessError:
-                stderr_content = read_capped_text(stderr_path)
+                stderr_content = await asyncio.to_thread(
+                    read_capped_text, stderr_path
+                )
                 duration_ms = (time.monotonic() - start) * 1000
                 return CommandResult(
                     stdout="",
@@ -247,7 +253,7 @@ class CmdShell(ProcessBackedShell):
                     cwd=self._cwd,
                 )
             finally:
-                Path(stderr_path).unlink(missing_ok=True)
+                await asyncio.to_thread(discard_stderr_tempfile, stderr_path)
 
     async def env(self) -> dict[str, str]:
         """Return the subprocess environment by running set.
@@ -266,7 +272,9 @@ class CmdShell(ProcessBackedShell):
     async def history(self, limit: int = 100) -> list[str]:
         """Return the last `limit` lines of agentsh's own cmd history file."""
         try:
-            return read_last_lines(self._history_path, limit)
+            return await asyncio.to_thread(
+                read_last_lines, self._history_path, limit
+            )
         except FileNotFoundError:
             return []
 
@@ -300,7 +308,9 @@ class CmdShell(ProcessBackedShell):
         clink's master history safely; any clink failure is swallowed.
         """
         try:
-            append_secure_line(self._history_path, command)
+            await asyncio.to_thread(
+                append_secure_line, self._history_path, command
+            )
         except OSError:
             pass
 

@@ -1,10 +1,12 @@
 """Tests for context providers."""
 
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from agentsh.context.providers import filesystem as filesystem_module
 from agentsh.context.providers.docker import DockerProvider
 from agentsh.context.providers.environment import EnvironmentProvider
 from agentsh.context.providers.filesystem import FilesystemProvider
@@ -76,6 +78,35 @@ async def test_filesystem_provider_returns_fragment(
     files = result.payload.get("files", [])
     assert isinstance(files, list)
     assert "main.py" in files
+
+
+async def test_filesystem_provider_lists_off_the_event_loop(
+    shell: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The directory listing runs via asyncio.to_thread, not inline.
+
+    A cwd with a huge listing (e.g. node_modules) must not block the
+    event loop for the duration of the scan (issue #22).
+    """
+    shell.cwd = str(tmp_path)
+    (tmp_path / "main.py").touch()
+
+    main_thread = threading.current_thread()
+    list_thread: threading.Thread | None = None
+    original = filesystem_module._list_entries
+
+    def _spy(cwd: str) -> list[str]:
+        nonlocal list_thread
+        list_thread = threading.current_thread()
+        return original(cwd)
+
+    monkeypatch.setattr(filesystem_module, "_list_entries", _spy)
+    provider = FilesystemProvider()
+    result = await provider.collect(shell)
+
+    assert result is not None
+    assert list_thread is not None
+    assert list_thread is not main_thread
 
 
 async def test_python_env_provider(shell: MagicMock) -> None:
