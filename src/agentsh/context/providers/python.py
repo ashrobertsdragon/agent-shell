@@ -12,14 +12,33 @@ class PythonProvider:
     name = "python"
 
     async def collect(self, shell: Shell) -> ContextFragment | None:
-        """Return Python version and venv path, or None if Python is absent."""
-        version_result = await shell.execute("python3 --version 2>/dev/null")
-        if version_result.exit_code != 0 or not version_result.stdout.strip():
+        """Return Python version and venv path, or None if Python is absent.
+
+        No stderr redirection is used here: ``CommandResult`` already
+        separates stdout/stderr/exit_code regardless of what the command
+        does with fd 2, and POSIX-only redirection syntax such as
+        ``2>/dev/null`` breaks on cmd.exe and PowerShell. ``python3`` is
+        tried first (the common POSIX convention) and ``python`` is used
+        as a fallback, since Windows installs typically only provide the
+        latter.
+        """
+        version_result = await shell.execute("python3 --version")
+        version_text = (
+            version_result.stdout.strip() or version_result.stderr.strip()
+        )
+        if version_result.exit_code != 0 or not version_text:
+            version_result = await shell.execute("python --version")
+            version_text = (
+                version_result.stdout.strip() or version_result.stderr.strip()
+            )
+        if version_result.exit_code != 0 or not version_text:
             return None
 
-        python_version = version_result.stdout.strip().removeprefix("Python ")
-        cwd = shell.cwd
-        has_venv = (Path(cwd) / ".venv" / "bin" / "python").is_file()
+        python_version = version_text.removeprefix("Python ")
+        venv_dir = Path(shell.cwd) / ".venv"
+        has_venv = (venv_dir / "bin" / "python").is_file() or (
+            venv_dir / "Scripts" / "python.exe"
+        ).is_file()
 
         return ContextFragment(
             provider=self.name,

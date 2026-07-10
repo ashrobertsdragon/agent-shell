@@ -10,14 +10,18 @@ class GitProvider:
     name = "git"
 
     async def collect(self, shell: Shell) -> ContextFragment | None:
-        """Return git context, or None if not inside a git repository."""
-        branch_result = await shell.execute(
-            "git rev-parse --abbrev-ref HEAD 2>/dev/null"
-        )
+        """Return git context, or None if not inside a git repository.
+
+        No stderr redirection is used here: ``CommandResult`` already
+        separates stdout/stderr/exit_code regardless of what the command
+        does with fd 2, and POSIX-only redirection syntax such as
+        ``2>/dev/null`` breaks on cmd.exe and PowerShell.
+        """
+        branch_result = await shell.execute("git rev-parse --abbrev-ref HEAD")
         if branch_result.exit_code != 0 or not branch_result.stdout.strip():
             return None
 
-        status_result = await shell.execute("git status --short 2>/dev/null")
+        status_result = await shell.execute("git status --short")
         changed_files = [
             line[3:].strip()
             for line in status_result.stdout.splitlines()
