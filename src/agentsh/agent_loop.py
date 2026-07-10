@@ -1,21 +1,16 @@
 """The agentic tool-call loop — runs until the agent stops requesting tools."""
 
-from typing import TYPE_CHECKING
-
+from agentsh.agent.base import Agent
 from agentsh.events import AgentResponded, EventBus, ToolDenied, ToolInvoked
-from agentsh.models import CommandResult, Message, ToolResult
+from agentsh.models import CommandResult, ContextFragment, Message, ToolResult
 from agentsh.permissions import (
     PermissionDeniedError,
+    PermissionEngine,
     PermissionLevel,
     tool_call_key,
 )
-
-if TYPE_CHECKING:
-    from agentsh.agent.base import Agent
-    from agentsh.models import ContextFragment
-    from agentsh.permissions import PermissionEngine
-    from agentsh.repl import UI
-    from agentsh.tools.protocol import ToolRegistry
+from agentsh.tools.protocol import ToolRegistry
+from agentsh.ui_protocol import UI
 
 
 class AgentLoopLimitError(Exception):

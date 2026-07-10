@@ -125,7 +125,7 @@ async def test_shell_deny_skips_execution(
     app, run_command = _make_app(permission_level=PermissionLevel.DENY)
 
     with patch(
-        "agentsh.classifier.classify",
+        "agentsh.repl.classify",
         new=AsyncMock(return_value=InputKind.SHELL),
     ):
         await _run_with_inputs(app, ["rm -rf /", EOFError()])
@@ -152,7 +152,7 @@ async def test_shell_confirm_declined_still_invokes_and_pairs_events(
     app.event_bus.subscribe(CommandFinished, finished.append)
 
     with patch(
-        "agentsh.classifier.classify",
+        "agentsh.repl.classify",
         new=AsyncMock(return_value=InputKind.SHELL),
     ):
         await _run_with_inputs(app, ["git commit -m x", EOFError()])
@@ -177,7 +177,7 @@ async def test_shell_success_publishes_events_and_renders() -> None:
     ui = MagicMock()
 
     with patch(
-        "agentsh.classifier.classify",
+        "agentsh.repl.classify",
         new=AsyncMock(return_value=InputKind.SHELL),
     ):
         await _run_with_inputs(app, ["echo hi", EOFError()], ui=ui)
@@ -198,7 +198,7 @@ async def test_shell_permission_denied_error_is_handled(
     )
 
     with patch(
-        "agentsh.classifier.classify",
+        "agentsh.repl.classify",
         new=AsyncMock(return_value=InputKind.SHELL),
     ):
         await _run_with_inputs(app, ["rm -rf /", EOFError()])
@@ -217,11 +217,11 @@ async def test_agent_path_builds_context_and_runs_loop() -> None:
 
     with (
         patch(
-            "agentsh.classifier.classify",
+            "agentsh.repl.classify",
             new=AsyncMock(return_value=InputKind.AGENT),
         ),
         patch(
-            "agentsh.agent_loop.run_agent_loop",
+            "agentsh.repl.run_agent_loop",
             new=AsyncMock(return_value=final),
         ) as mock_loop,
     ):
@@ -242,11 +242,11 @@ async def test_agent_loop_limit_error_is_handled(
 
     with (
         patch(
-            "agentsh.classifier.classify",
+            "agentsh.repl.classify",
             new=AsyncMock(return_value=InputKind.AGENT),
         ),
         patch(
-            "agentsh.agent_loop.run_agent_loop",
+            "agentsh.repl.run_agent_loop",
             new=AsyncMock(
                 side_effect=AgentLoopLimitError("exceeded 20 iterations")
             ),

@@ -1,18 +1,15 @@
 """App — top-level wiring object; holds all runtime dependencies."""
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
+from agentsh.agent import Agent
+from agentsh.context.builder import ContextBuilder
 from agentsh.events import EventBus
 from agentsh.models import Message
+from agentsh.permissions import PermissionEngine
 from agentsh.shell.protocol import Shell
 from agentsh.tools.protocol import ToolRegistry
-
-if TYPE_CHECKING:
-    from agentsh.agent import Agent
-    from agentsh.context.builder import ContextBuilder
-    from agentsh.permissions import PermissionEngine
-    from agentsh.repl import UI
+from agentsh.ui_protocol import UI
 
 
 @dataclass
