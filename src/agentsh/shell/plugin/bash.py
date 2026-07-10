@@ -33,7 +33,7 @@ def _default_history_path() -> Path:
 
 def _append_line(path: str, line: str) -> None:
     """Append line plus a trailing newline to path, off the event loop."""
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 

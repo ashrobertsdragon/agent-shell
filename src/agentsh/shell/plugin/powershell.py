@@ -79,7 +79,7 @@ def _psreadline_history_path(platform: str = os.name) -> Path:
 def _append_psreadline_line(path: Path, line: str) -> None:
     """Append line to the PSReadLine mirror file, off the event loop."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 

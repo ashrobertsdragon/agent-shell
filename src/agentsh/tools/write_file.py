@@ -39,11 +39,10 @@ def _write(path: Path, content: str | None, patch: str | None) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if patch is not None:
-        original = (
-            path.read_text(encoding="utf-8", errors="replace")
-            if path.exists()
-            else ""
-        )
+        try:
+            original = path.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            original = ""
         path.write_text(_apply_patch(original, patch), encoding="utf-8")
     else:
         path.write_text(content or "", encoding="utf-8")
