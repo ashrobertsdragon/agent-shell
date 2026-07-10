@@ -15,11 +15,16 @@ def _string_map(value: JsonValue | None) -> dict[str, str]:
     ``package.json``'s ``scripts``, ``dependencies``, and
     ``devDependencies`` fields are always objects of string values in
     well-formed manifests; any other shape (missing key, malformed
-    file) degrades to an empty mapping rather than raising.
+    file) degrades to an empty mapping rather than raising. Non-string
+    values (e.g. a manifest hand-edited with a nested object) are
+    dropped rather than stringified, so the payload shape stays what
+    Node tooling actually expects.
     """
     if not isinstance(value, Mapping):
         return {}
-    return {str(key): str(item) for key, item in value.items()}
+    return {
+        str(key): item for key, item in value.items() if isinstance(item, str)
+    }
 
 
 @register("node")
@@ -58,8 +63,10 @@ class NodeProvider:
         package_json_path = Path(shell.cwd) / "package.json"
         if package_json_path.is_file():
             try:
-                package_data = json.loads(package_json_path.read_text())
-            except json.JSONDecodeError:
+                package_data = json.loads(
+                    package_json_path.read_text(encoding="utf-8")
+                )
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 package_data = None
 
         fields = package_data if isinstance(package_data, Mapping) else {}

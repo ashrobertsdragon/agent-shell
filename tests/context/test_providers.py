@@ -469,6 +469,26 @@ async def test_node_provider_strips_v_prefix_from_version(
     assert result.payload.get("node_version") == "20.11.0"
 
 
+async def test_node_provider_uses_stderr_version_when_stdout_empty(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """NodeProvider falls back to stderr when stdout is empty."""
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="",
+            stderr="v20.11.0\n",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+    )
+    shell.cwd = str(tmp_path)
+    provider = NodeProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("node_version") == "20.11.0"
+
+
 async def test_node_provider_returns_fragment_without_package_json(
     shell: MagicMock, tmp_path: Path
 ) -> None:
@@ -526,6 +546,29 @@ async def test_node_provider_parses_package_json(
     assert result.payload.get("scripts") == {"build": "tsc", "test": "vitest"}
     assert result.payload.get("dependencies") == {"react": "^18.2.0"}
     assert result.payload.get("dev_dependencies") == {"typescript": "^5.4.0"}
+
+
+async def test_node_provider_defaults_missing_package_json_keys(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """Missing scripts/dependencies/devDependencies keys degrade to {}."""
+    (tmp_path / "package.json").write_text('{"name": "example"}')
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="v20.11.0\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+    )
+    shell.cwd = str(tmp_path)
+    provider = NodeProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("scripts") == {}
+    assert result.payload.get("dependencies") == {}
+    assert result.payload.get("dev_dependencies") == {}
 
 
 async def test_node_provider_handles_malformed_package_json(
