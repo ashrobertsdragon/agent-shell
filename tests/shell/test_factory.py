@@ -19,9 +19,18 @@ def test_create_shell_auto_unsupported_posix_shell_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Auto-detection of an unsupported $SHELL fails gracefully."""
-    monkeypatch.setenv("SHELL", "/usr/bin/fish")
-    with pytest.raises(UnsupportedShellError, match="fish"):
+    monkeypatch.setenv("SHELL", "/usr/bin/tcsh")
+    with pytest.raises(UnsupportedShellError, match="tcsh"):
         create_shell("auto")
+
+
+def test_create_shell_auto_detects_fish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto-detection of $SHELL=/usr/bin/fish resolves to FishShell."""
+    monkeypatch.setenv("SHELL", "/usr/bin/fish")
+    shell = create_shell("auto")
+    assert type(shell).__name__ == "FishShell"
 
 
 def test_create_shell_auto_undetectable_raises(
