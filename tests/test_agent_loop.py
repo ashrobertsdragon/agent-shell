@@ -195,6 +195,42 @@ async def test_permission_denied_from_tool_injects_error_tool_result(
     assert denied_events[0].tool_name == "RunCommand"
 
 
+async def test_tools_schemas_computed_once_per_turn(
+    ui: MagicMock,
+    allow_perms: MagicMock,
+    bus: EventBus,
+) -> None:
+    """tools.schemas() is fixed for the whole turn, so it must be called
+    once even though the loop iterates multiple times.
+    """
+    agent = AsyncMock()
+    agent.respond.side_effect = [
+        _tool_call_msg(call_id="tc1"),
+        _tool_call_msg(call_id="tc2"),
+        _text("Done."),
+    ]
+
+    cmd_result = CommandResult(
+        stdout="ok\n", stderr="", exit_code=0, duration_ms=1.0, cwd="/tmp"
+    )
+    registry = _registry(invoke_result=cmd_result)
+    conversation: list[Message] = [Message(role="user", content="do things")]
+
+    result = await run_agent_loop(
+        agent=agent,
+        conversation=conversation,
+        context=[],
+        tools=registry,
+        permissions=allow_perms,
+        ui=ui,
+        event_bus=bus,
+    )
+
+    assert result.content == "Done."
+    assert agent.respond.call_count == 3
+    registry.schemas.assert_called_once()
+
+
 async def test_iteration_limit_raises(
     ui: MagicMock,
     allow_perms: MagicMock,

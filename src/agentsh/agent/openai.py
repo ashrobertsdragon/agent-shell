@@ -1,6 +1,7 @@
 """OpenAI backend."""
 
 import json
+import uuid
 
 import openai
 from openai.types.chat import (
@@ -14,6 +15,7 @@ from openai.types.chat import (
 )
 
 from agentsh.agent import SYSTEM_PREFIX, Agent
+from agentsh.agent.caching import IdentityCache
 from agentsh.config import AgentConfig
 from agentsh.context.sanitize import render_context_fragment
 from agentsh.models import ContextFragment, Message, ToolCall
@@ -92,9 +94,24 @@ class OpenaiAgent(Agent):
     """LLM backend using the OpenAI API."""
 
     def __init__(self, config: AgentConfig) -> None:
-        """Initialise the async OpenAI client."""
+        """Initialise the async OpenAI client and per-turn caches.
+
+        `_prompt_cache_key` is a stable identifier for this agent
+        instance's lifetime (one shell session). OpenAI caches
+        identical-prefix requests automatically, but routes them more
+        reliably to the same cache-holding backend when a
+        `prompt_cache_key` is supplied -- see
+        https://platform.openai.com/docs/guides/prompt-caching.
+        """
         self._config = config
         self._client = openai.AsyncOpenAI()
+        self._prompt_cache_key = uuid.uuid4().hex
+        self._system_cache: IdentityCache[ChatCompletionSystemMessageParam] = (
+            IdentityCache()
+        )
+        self._tools_cache: IdentityCache[list[ChatCompletionToolParam]] = (
+            IdentityCache()
+        )
 
     async def respond(
         self,
@@ -102,27 +119,39 @@ class OpenaiAgent(Agent):
         context: list[ContextFragment],
         tools: list[SchemaDict],
     ) -> Message:
-        """Call the OpenAI API and return the next assistant message."""
-        openai_tools: list[ChatCompletionToolParam] = []
-        for t in tools:
-            schema = dict(t.get("input_schema", {}))
+        """Call the OpenAI API and return the next assistant message.
 
-            tool_param: ChatCompletionToolParam = {
-                "type": "function",
-                "function": {
-                    "name": str(t["name"]),
-                    "description": str(t.get("description", "")),
-                    "parameters": schema,
-                },
-            }
-            openai_tools.append(tool_param)
+        `context` and `tools` are fixed for an entire user turn --
+        `run_agent_loop` passes the same list objects on every
+        iteration -- so the system message and converted tool list are
+        memoized by object identity rather than rebuilt on every one of
+        up to 20 iterations.
+        """
 
-        messages: list[ChatCompletionMessageParam] = []
-        sys_msg: ChatCompletionSystemMessageParam = {
-            "role": "system",
-            "content": _build_system(context),
-        }
-        messages.append(sys_msg)
+        def _build_tools() -> list[ChatCompletionToolParam]:
+            built: list[ChatCompletionToolParam] = []
+            for t in tools:
+                schema = dict(t.get("input_schema", {}))
+                tool_param: ChatCompletionToolParam = {
+                    "type": "function",
+                    "function": {
+                        "name": str(t["name"]),
+                        "description": str(t.get("description", "")),
+                        "parameters": schema,
+                    },
+                }
+                built.append(tool_param)
+            return built
+
+        def _build_system_message() -> ChatCompletionSystemMessageParam:
+            return {"role": "system", "content": _build_system(context)}
+
+        openai_tools = self._tools_cache.get_or_build(tools, _build_tools)
+        sys_msg = self._system_cache.get_or_build(
+            context, _build_system_message
+        )
+
+        messages: list[ChatCompletionMessageParam] = [sys_msg]
         for m in conversation:
             messages.extend(_message_to_openai(m))
 
@@ -132,12 +161,14 @@ class OpenaiAgent(Agent):
                 messages=messages,
                 tools=openai_tools,
                 max_tokens=self._config.max_tokens,
+                prompt_cache_key=self._prompt_cache_key,
             )
         else:
             response = await self._client.chat.completions.create(
                 model=self._config.model,
                 messages=messages,
                 max_tokens=self._config.max_tokens,
+                prompt_cache_key=self._prompt_cache_key,
             )
 
         choice = response.choices[0].message

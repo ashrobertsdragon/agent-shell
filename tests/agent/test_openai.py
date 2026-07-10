@@ -6,7 +6,15 @@ import pytest
 from agentsh.agent.openai import OpenaiAgent
 
 from agentsh.config import AgentConfig
-from agentsh.models import Message
+from agentsh.context.sanitize import render_context_fragment
+from agentsh.models import ContextFragment, Message
+
+FRAGMENT_SPY_TARGET = "agentsh.agent.openai.render_context_fragment"
+
+
+def _fragment(provider: str = "git") -> ContextFragment:
+    """Build a minimal context fragment for cache-identity tests."""
+    return ContextFragment(provider=provider, summary="on main", payload={})
 
 
 @pytest.fixture
@@ -120,3 +128,72 @@ async def test_respond_tolerates_malformed_tool_arguments(
         )
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].arguments == {}
+
+
+async def test_respond_sends_a_stable_prompt_cache_key(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """A stable prompt_cache_key is sent on every call so OpenAI's
+    automatic prompt caching routes repeat requests to the same
+    cache-holding backend.
+    """
+    agent = OpenaiAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    with patch.object(
+        agent._client.chat.completions, "create", new=mock_create
+    ):
+        await agent.respond(conversation=[], context=[], tools=[])
+        first_key = mock_create.call_args.kwargs["prompt_cache_key"]
+        await agent.respond(conversation=[], context=[], tools=[])
+        second_key = mock_create.call_args.kwargs["prompt_cache_key"]
+
+    assert isinstance(first_key, str)
+    assert first_key
+    assert first_key == second_key
+
+
+async def test_respond_reuses_system_message_for_same_context_object(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """The system message is rebuilt once per turn (same context list
+    object), not once per loop iteration.
+    """
+    agent = OpenaiAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    context = [_fragment()]
+
+    with (
+        patch.object(agent._client.chat.completions, "create", new=mock_create),
+        patch(FRAGMENT_SPY_TARGET, wraps=render_context_fragment) as spy,
+    ):
+        await agent.respond(conversation=[], context=context, tools=[])
+        await agent.respond(conversation=[], context=context, tools=[])
+
+    assert spy.call_count == 1
+
+
+async def test_respond_reuses_tools_for_same_tools_object(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """The tool list is converted once per turn (same tools list object),
+    not once per loop iteration.
+    """
+    agent = OpenaiAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    tools = [
+        {
+            "name": "RunCommand",
+            "description": "run a command",
+            "input_schema": {},  # type: ignore[typeddict-item]
+        }
+    ]
+
+    with patch.object(
+        agent._client.chat.completions, "create", new=mock_create
+    ):
+        await agent.respond(conversation=[], context=[], tools=tools)  # type: ignore[arg-type]
+        first_tools = mock_create.call_args.kwargs["tools"]
+        await agent.respond(conversation=[], context=[], tools=tools)  # type: ignore[arg-type]
+        second_tools = mock_create.call_args.kwargs["tools"]
+
+    assert first_tools is second_tools

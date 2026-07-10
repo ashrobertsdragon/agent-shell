@@ -46,8 +46,14 @@ async def run_agent_loop(
     """
     bus = event_bus or EventBus()
 
+    # Fixed for the whole turn -- computed once rather than on every
+    # iteration, since the registry doesn't change mid-turn and each
+    # backend memoizes its own request payload by the identity of this
+    # exact list (see agentsh.agent.caching.IdentityCache).
+    schemas = tools.schemas()
+
     for _iteration in range(max_iterations):
-        response = await agent.respond(conversation, context, tools.schemas())
+        response = await agent.respond(conversation, context, schemas)
         conversation.append(response)
 
         await bus.publish(

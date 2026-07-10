@@ -7,6 +7,7 @@ from google import genai
 from google.genai import types
 
 from agentsh.agent import SYSTEM_PREFIX, Agent
+from agentsh.agent.caching import IdentityCache
 from agentsh.config import AgentConfig
 from agentsh.context.sanitize import render_context_fragment
 from agentsh.models import ContextFragment, Message, ToolCall
@@ -104,9 +105,13 @@ class GoogleAgent(Agent):
     """LLM backend using the Google GenAI API."""
 
     def __init__(self, config: AgentConfig) -> None:
-        """Initialise the async Google GenAI client."""
+        """Initialise the async Google GenAI client and per-turn caches."""
         self._config = config
         self._client = genai.Client()
+        self._system_cache: IdentityCache[str] = IdentityCache()
+        self._tools_cache: IdentityCache[
+            list[types.Tool | object | types.FunctionDeclaration]
+        ] = IdentityCache()
 
     async def respond(
         self,
@@ -114,22 +119,50 @@ class GoogleAgent(Agent):
         context: list[ContextFragment],
         tools: list[SchemaDict],
     ) -> Message:
-        """Call the Google GenAI API and return the next assistant message."""
-        google_tools: list[types.Tool | object | types.FunctionDeclaration] = []
-        for t in tools:
-            schema = _build_google_schema(t["input_schema"])
-            tool = types.Tool(
-                function_declarations=[
-                    types.FunctionDeclaration(
-                        name=str(t["name"]),
-                        description=str(t.get("description", "")),
-                        parameters=schema,
-                    )
-                ]
-            )
-            google_tools.append(tool)
+        """Call the Google GenAI API and return the next assistant message.
 
-        system_instruction = _build_system(context)
+        `context` and `tools` are fixed for an entire user turn --
+        `run_agent_loop` passes the same list objects on every
+        iteration -- so the system instruction and converted tool
+        declarations are memoized by object identity rather than
+        rebuilt on every one of up to 20 iterations.
+
+        Google's GenAI SDK has no per-request `cache_control` breakpoint
+        like Anthropic's; server-side caching there is either fully
+        automatic ("implicit" caching, which needs no code and simply
+        benefits from a stable prefix) or requires explicitly creating
+        and managing a `CachedContent` resource (`client.aio.caches`)
+        with its own minimum-token threshold and TTL lifecycle. This
+        agent's system prompt is small and unlikely to reliably clear
+        that threshold, and the lifecycle overhead (create, refresh,
+        invalidate on context change, delete) is not worth it for
+        uncertain savings, so this backend only eliminates the
+        redundant Python-side rebuild every iteration and otherwise
+        relies on implicit caching for any server-side benefit.
+        """
+
+        def _build_tools() -> list[
+            types.Tool | object | types.FunctionDeclaration
+        ]:
+            built: list[types.Tool | object | types.FunctionDeclaration] = []
+            for t in tools:
+                schema = _build_google_schema(t["input_schema"])
+                tool = types.Tool(
+                    function_declarations=[
+                        types.FunctionDeclaration(
+                            name=str(t["name"]),
+                            description=str(t.get("description", "")),
+                            parameters=schema,
+                        )
+                    ]
+                )
+                built.append(tool)
+            return built
+
+        google_tools = self._tools_cache.get_or_build(tools, _build_tools)
+        system_instruction = self._system_cache.get_or_build(
+            context, lambda: _build_system(context)
+        )
 
         call_id_to_name: dict[str, str] = {}
         for m in conversation:
@@ -142,13 +175,13 @@ class GoogleAgent(Agent):
             contents.append(content)
 
         if google_tools:
-            config = types.GenerateContentConfig(
+            generate_config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 tools=google_tools,
                 max_output_tokens=self._config.max_tokens,
             )
         else:
-            config = types.GenerateContentConfig(
+            generate_config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 max_output_tokens=self._config.max_tokens,
             )
@@ -156,7 +189,7 @@ class GoogleAgent(Agent):
         response = await self._client.aio.models.generate_content(
             model=self._config.model,
             contents=contents,
-            config=config,
+            config=generate_config,
         )
 
         if not response.candidates:

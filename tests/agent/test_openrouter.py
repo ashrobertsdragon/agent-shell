@@ -6,7 +6,15 @@ import pytest
 from agentsh.agent.openrouter import OpenrouterAgent
 
 from agentsh.config import AgentConfig
-from agentsh.models import Message
+from agentsh.context.sanitize import render_context_fragment
+from agentsh.models import ContextFragment, Message
+
+FRAGMENT_SPY_TARGET = "agentsh.agent.openrouter.render_context_fragment"
+
+
+def _fragment(provider: str = "git") -> ContextFragment:
+    """Build a minimal context fragment for cache-identity tests."""
+    return ContextFragment(provider=provider, summary="on main", payload={})
 
 
 @pytest.fixture
@@ -119,3 +127,97 @@ async def test_respond_tolerates_malformed_tool_arguments(
         )
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].arguments == {}
+
+
+async def test_respond_marks_system_prompt_as_cache_breakpoint(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """The system message is sent as a content-part list with a cache
+    breakpoint on its last part.
+    """
+    agent = OpenrouterAgent(config)
+    mock_send = AsyncMock(return_value=text_response)
+    with patch.object(agent._client.chat, "send_async", new=mock_send):
+        await agent.respond(
+            conversation=[Message(role="user", content="hello")],
+            context=[],
+            tools=[],
+        )
+
+    sys_content = mock_send.call_args.kwargs["messages"][0]["content"]
+    assert isinstance(sys_content, list)
+    assert sys_content[-1]["cache_control"] == {"type": "ephemeral"}
+
+
+async def test_respond_marks_last_tool_as_cache_breakpoint(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """Only the last tool definition carries a cache breakpoint."""
+    agent = OpenrouterAgent(config)
+    mock_send = AsyncMock(return_value=text_response)
+    with patch.object(agent._client.chat, "send_async", new=mock_send):
+        await agent.respond(
+            conversation=[Message(role="user", content="hello")],
+            context=[],
+            tools=[
+                {
+                    "name": "A",
+                    "description": "a",
+                    "input_schema": {},  # type: ignore[typeddict-item]
+                },
+                {
+                    "name": "B",
+                    "description": "b",
+                    "input_schema": {},  # type: ignore[typeddict-item]
+                },
+            ],
+        )
+
+    sent_tools = mock_send.call_args.kwargs["tools"]
+    assert "cache_control" not in sent_tools[0]
+    assert sent_tools[-1]["cache_control"] == {"type": "ephemeral"}
+
+
+async def test_respond_marks_last_message_as_cache_breakpoint(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """The most recently appended conversation turn is marked as a cache
+    breakpoint so the growing per-turn history reuses earlier reads.
+    """
+    agent = OpenrouterAgent(config)
+    mock_send = AsyncMock(return_value=text_response)
+    with patch.object(agent._client.chat, "send_async", new=mock_send):
+        await agent.respond(
+            conversation=[
+                Message(role="user", content="first"),
+                Message(role="assistant", content="second"),
+            ],
+            context=[],
+            tools=[],
+        )
+
+    sent_messages = mock_send.call_args.kwargs["messages"]
+    assert sent_messages[1]["content"] == "first"
+    last_content = sent_messages[-1]["content"]
+    assert isinstance(last_content, list)
+    assert last_content[-1]["cache_control"] == {"type": "ephemeral"}
+
+
+async def test_respond_reuses_system_prompt_for_same_context_object(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """The system prompt is rebuilt once per turn (same context list
+    object), not once per loop iteration.
+    """
+    agent = OpenrouterAgent(config)
+    mock_send = AsyncMock(return_value=text_response)
+    context = [_fragment()]
+
+    with (
+        patch.object(agent._client.chat, "send_async", new=mock_send),
+        patch(FRAGMENT_SPY_TARGET, wraps=render_context_fragment) as spy,
+    ):
+        await agent.respond(conversation=[], context=context, tools=[])
+        await agent.respond(conversation=[], context=context, tools=[])
+
+    assert spy.call_count == 1
