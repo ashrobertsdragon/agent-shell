@@ -170,3 +170,30 @@ async def test_respond_reuses_system_message_for_same_context_object(
         await agent.respond(conversation=[], context=context, tools=[])
 
     assert spy.call_count == 1
+
+
+async def test_respond_reuses_tools_for_same_tools_object(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """The tool list is converted once per turn (same tools list object),
+    not once per loop iteration.
+    """
+    agent = OpenaiAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    tools = [
+        {
+            "name": "RunCommand",
+            "description": "run a command",
+            "input_schema": {},  # type: ignore[typeddict-item]
+        }
+    ]
+
+    with patch.object(
+        agent._client.chat.completions, "create", new=mock_create
+    ):
+        await agent.respond(conversation=[], context=[], tools=tools)  # type: ignore[arg-type]
+        first_tools = mock_create.call_args.kwargs["tools"]
+        await agent.respond(conversation=[], context=[], tools=tools)  # type: ignore[arg-type]
+        second_tools = mock_create.call_args.kwargs["tools"]
+
+    assert first_tools is second_tools
