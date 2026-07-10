@@ -12,6 +12,7 @@ from agentsh.context.providers.environment import EnvironmentProvider
 from agentsh.context.providers.filesystem import FilesystemProvider
 from agentsh.context.providers.git import GitProvider
 from agentsh.context.providers.history import HistoryProvider
+from agentsh.context.providers.kubernetes import KubernetesProvider
 from agentsh.context.providers.python import PythonProvider
 from agentsh.models import CommandResult
 
@@ -64,6 +65,94 @@ async def test_git_provider_returns_none_outside_repo(shell: MagicMock) -> None:
     provider = GitProvider()
     result = await provider.collect(shell)
     assert result is None
+
+
+async def test_git_provider_commands_are_shell_portable(
+    shell: MagicMock,
+) -> None:
+    """GitProvider never embeds POSIX-only redirection in its commands.
+
+    ``2>/dev/null`` is redundant (CommandResult already separates
+    stdout/stderr/exit_code) and breaks on cmd.exe/PowerShell, which
+    have no ``/dev/null`` device.
+    """
+    commands: list[str] = []
+
+    async def execute(command: str) -> CommandResult:
+        commands.append(command)
+        return CommandResult(
+            stdout="main\n", stderr="", exit_code=0, duration_ms=1, cwd="/repo"
+        )
+
+    shell.execute = execute
+    await GitProvider().collect(shell)
+    assert commands
+    assert all("/dev/null" not in c for c in commands)
+
+
+async def test_kubernetes_provider_returns_fragment_in_cluster(
+    shell: MagicMock,
+) -> None:
+    """KubernetesProvider returns a fragment when kubectl has a context."""
+    shell.execute = AsyncMock(
+        side_effect=[
+            CommandResult(
+                stdout="minikube\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd="/repo",
+            ),
+            CommandResult(
+                stdout="default\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd="/repo",
+            ),
+        ]
+    )
+    provider = KubernetesProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["context"] == "minikube"
+    assert result.payload["namespace"] == "default"
+
+
+async def test_kubernetes_provider_returns_none_without_kubectl(
+    shell: MagicMock,
+) -> None:
+    """KubernetesProvider returns None when kubectl is unavailable."""
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="", stderr="", exit_code=1, duration_ms=1, cwd="/repo"
+        )
+    )
+    provider = KubernetesProvider()
+    result = await provider.collect(shell)
+    assert result is None
+
+
+async def test_kubernetes_provider_commands_are_shell_portable(
+    shell: MagicMock,
+) -> None:
+    """KubernetesProvider never embeds POSIX-only redirection in its commands."""
+    commands: list[str] = []
+
+    async def execute(command: str) -> CommandResult:
+        commands.append(command)
+        return CommandResult(
+            stdout="minikube\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+
+    shell.execute = execute
+    await KubernetesProvider().collect(shell)
+    assert commands
+    assert all("/dev/null" not in c for c in commands)
 
 
 async def test_filesystem_provider_returns_fragment(
@@ -136,6 +225,84 @@ async def test_python_env_provider(shell: MagicMock) -> None:
     assert result.payload.get("python_version") == "3.12.0"
 
 
+async def test_python_env_provider_falls_back_to_python_when_python3_missing(
+    shell: MagicMock,
+) -> None:
+    """PythonProvider falls back to ``python`` when ``python3`` is absent.
+
+    Windows shells typically only have ``python`` on PATH, not
+    ``python3``.
+    """
+    commands: list[str] = []
+
+    async def execute(command: str) -> CommandResult:
+        commands.append(command)
+        if command.startswith("python3"):
+            return CommandResult(
+                stdout="",
+                stderr="'python3' is not recognized",
+                exit_code=1,
+                duration_ms=1,
+                cwd="C:\\Users\\agentsh",
+            )
+        return CommandResult(
+            stdout="Python 3.12.0\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="C:\\Users\\agentsh",
+        )
+
+    shell.execute = execute
+    shell.cwd = "C:\\Users\\agentsh"
+    provider = PythonProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("python_version") == "3.12.0"
+    assert commands == ["python3 --version", "python --version"]
+
+
+async def test_python_env_provider_returns_none_when_neither_present(
+    shell: MagicMock,
+) -> None:
+    """PythonProvider returns None when neither python3 nor python is found."""
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="",
+            stderr="command not found",
+            exit_code=127,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = PythonProvider()
+    result = await provider.collect(shell)
+    assert result is None
+
+
+async def test_python_provider_commands_are_shell_portable(
+    shell: MagicMock,
+) -> None:
+    """PythonProvider never embeds POSIX-only redirection in its commands."""
+    commands: list[str] = []
+
+    async def execute(command: str) -> CommandResult:
+        commands.append(command)
+        return CommandResult(
+            stdout="Python 3.12.0\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+
+    shell.execute = execute
+    shell.cwd = "/repo"
+    await PythonProvider().collect(shell)
+    assert commands
+    assert all("/dev/null" not in c for c in commands)
+
+
 async def test_docker_provider_returns_none_without_docker(
     shell: MagicMock,
 ) -> None:
@@ -152,6 +319,35 @@ async def test_docker_provider_returns_none_without_docker(
     provider = DockerProvider()
     result = await provider.collect(shell)
     assert result is None
+
+
+async def test_docker_provider_commands_are_shell_portable(
+    shell: MagicMock,
+) -> None:
+    """DockerProvider avoids POSIX-only redirection and single-quoting.
+
+    ``2>/dev/null`` breaks on cmd.exe/PowerShell. Single-quoted format
+    strings are also non-portable: cmd.exe does not strip single quotes
+    as a quoting character, so the literal quote characters would be
+    passed straight through to docker.
+    """
+    commands: list[str] = []
+
+    async def execute(command: str) -> CommandResult:
+        commands.append(command)
+        return CommandResult(
+            stdout="web\tnginx\tUp\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+
+    shell.execute = execute
+    await DockerProvider().collect(shell)
+    assert commands
+    assert all("/dev/null" not in c for c in commands)
+    assert all("'" not in c for c in commands)
 
 
 async def test_history_provider(shell: MagicMock) -> None:

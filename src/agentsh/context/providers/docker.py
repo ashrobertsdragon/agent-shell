@@ -10,10 +10,18 @@ class DockerProvider:
     name = "docker"
 
     async def collect(self, shell: Shell) -> ContextFragment | None:
-        """Return running containers, or None if Docker is unavailable."""
+        """Return running containers, or None if Docker is unavailable.
+
+        No stderr redirection is used here: ``CommandResult`` already
+        separates stdout/stderr/exit_code regardless of what the command
+        does with fd 2, and POSIX-only redirection syntax such as
+        ``2>/dev/null`` breaks on cmd.exe and PowerShell. The ``--format``
+        value is double-quoted rather than single-quoted for the same
+        reason: cmd.exe does not treat single quotes as a quoting
+        character, so they would be passed through literally.
+        """
         result = await shell.execute(
-            "docker ps --format "
-            "'{{.Names}}\t{{.Image}}\t{{.Status}}' 2>/dev/null"
+            'docker ps --format "{{.Names}}\t{{.Image}}\t{{.Status}}"'
         )
         if result.exit_code != 0:
             return None

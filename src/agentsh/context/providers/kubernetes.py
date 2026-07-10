@@ -10,16 +10,19 @@ class KubernetesProvider:
     name = "kubernetes"
 
     async def collect(self, shell: Shell) -> ContextFragment | None:
-        """Return the current kube context or None if kubectl is unavailable."""
-        ctx_result = await shell.execute(
-            "kubectl config current-context 2>/dev/null"
-        )
+        """Return the current kube context or None if kubectl is unavailable.
+
+        No stderr redirection is used here: ``CommandResult`` already
+        separates stdout/stderr/exit_code regardless of what the command
+        does with fd 2, and POSIX-only redirection syntax such as
+        ``2>/dev/null`` breaks on cmd.exe and PowerShell.
+        """
+        ctx_result = await shell.execute("kubectl config current-context")
         if ctx_result.exit_code != 0 or not ctx_result.stdout.strip():
             return None
 
         ns_result = await shell.execute(
-            "kubectl config view --minify -o "
-            "jsonpath='{..namespace}' 2>/dev/null"
+            'kubectl config view --minify -o jsonpath="{..namespace}"'
         )
         namespace = ns_result.stdout.strip() or "default"
 
