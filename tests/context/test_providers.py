@@ -1,5 +1,6 @@
 """Tests for context providers."""
 
+import socket
 import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -1210,6 +1211,65 @@ async def test_network_provider_ignores_non_listen_lines(
     result = await provider.collect(shell)
     assert result is not None
     assert result.payload["listening_ports"] == []
+
+
+async def test_network_provider_ignores_unix_domain_sockets(
+    shell: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetworkProvider excludes UNIX domain sockets from listening_ports.
+
+    Linux's ``netstat -an`` lists these in a separate section whose
+    ``State`` column value ``LISTENING`` contains the substring
+    ``LISTEN``, and a socket path ending in a dot-number segment (e.g.
+    a trailing PID) would otherwise be misparsed as a TCP port.
+    """
+    monkeypatch.setattr(
+        network_module, "_has_active_network_route", lambda: True
+    )
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout=(
+                "Active UNIX domain sockets (servers and established)\n"
+                "Proto RefCnt Flags       Type       State         "
+                "I-Node   Path\n"
+                "unix  2      [ ACC ]     STREAM     LISTENING     "
+                "12345    /run/user/1000/dbus-abcd.1000\n"
+            ),
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = NetworkProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["listening_ports"] == []
+
+
+async def test_network_provider_falls_back_to_ipv6_route(
+    shell: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetworkProvider reports connectivity on an IPv6-only host.
+
+    An IPv4-only route probe would misreport an IPv6-only host as
+    having no network at all, so a failed IPv4 probe falls back to an
+    IPv6 destination.
+    """
+    monkeypatch.setattr(
+        network_module,
+        "_has_route_via",
+        lambda family, address: family == socket.AF_INET6,
+    )
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="", stderr="", exit_code=0, duration_ms=1, cwd="/repo"
+        )
+    )
+    provider = NetworkProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["network_up"] is True
 
 
 async def test_network_provider_commands_are_shell_portable(

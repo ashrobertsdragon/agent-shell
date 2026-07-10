@@ -10,24 +10,41 @@ from agentsh.shell.protocol import Shell
 _PORT_RE = re.compile(r"[:.](\d+)$")
 
 
+def _has_route_via(family: socket.AddressFamily, address: str) -> bool:
+    """Return True if the kernel has a non-loopback route to address.
+
+    Connecting a ``SOCK_DGRAM`` socket only asks the kernel to resolve
+    which local interface/source address its routing table would use
+    for the given (literal, so no DNS lookup) destination -- no packet
+    is ever put on the wire.
+    """
+    with socket.socket(family, socket.SOCK_DGRAM) as probe:
+        try:
+            probe.connect((address, 80))
+        except OSError:
+            return False
+        source_address = probe.getsockname()[0]
+        return not (
+            source_address.startswith("127.") or source_address == "::1"
+        )
+
+
 def _has_active_network_route() -> bool:
     """Return True if the host has a working non-loopback network route.
 
     This is a local-only, zero-network-I/O approximation of
-    "connectivity", not a reachability probe: connecting a
-    ``SOCK_DGRAM`` socket only asks the kernel to resolve which local
-    interface/source address its routing table would use for the given
-    (literal, so no DNS lookup) destination -- no packet is ever put on
-    the wire. That makes it effectively instant, unlike a ping or DNS
-    query, which is what makes it safe to run inside the tight
-    per-provider timeout described in ``NetworkProvider.collect``.
+    "connectivity", not a reachability probe -- see ``_has_route_via``.
+    That makes it effectively instant, unlike a ping or DNS query,
+    which is what makes it safe to run inside the tight per-provider
+    timeout described in ``NetworkProvider.collect``.
+
+    IPv4 is tried first since it's the common case; an IPv6-only host
+    (no IPv4 route at all) falls back to an IPv6 destination so it
+    isn't misreported as having no network.
     """
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        try:
-            probe.connect(("8.8.8.8", 80))
-        except OSError:
-            return False
-        return not probe.getsockname()[0].startswith("127.")
+    return _has_route_via(socket.AF_INET, "8.8.8.8") or _has_route_via(
+        socket.AF_INET6, "2001:4860:4860::8888"
+    )
 
 
 @register("network")
@@ -64,6 +81,14 @@ class NetworkProvider:
         Linux's ``LISTEN``, Windows' ``LISTENING``, and BSD's
         ``(LISTEN)`` alike.
 
+        Lines whose first token is ``unix`` are skipped outright: Linux's
+        ``netstat -an`` also lists UNIX domain sockets in a separate
+        section whose ``State`` column value ``LISTENING`` contains the
+        substring ``LISTEN``, and those rows have no ``:port``/``.port``
+        local address at all -- some socket paths can still end in a
+        dot-number segment (e.g. an abstract name with a trailing PID),
+        which would otherwise be misparsed as a TCP port.
+
         Only TCP listeners are reported: UDP sockets have no state
         column in any of the three netstat dialects, so reliably
         distinguishing "bound" UDP sockets from other UDP rows without
@@ -98,7 +123,7 @@ class NetworkProvider:
             if "LISTEN" not in line:
                 continue
             tokens = line.split()
-            if not tokens:
+            if not tokens or tokens[0].lower() == "unix":
                 continue
             port = next(
                 (m.group(1) for t in tokens if (m := _PORT_RE.search(t))),
