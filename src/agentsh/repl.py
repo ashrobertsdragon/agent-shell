@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -11,9 +12,17 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
 
+from agentsh.agent_loop import AgentLoopLimitError, run_agent_loop
 from agentsh.app import App
+from agentsh.classifier import InputKind, agent_query, classify
+from agentsh.events import CommandFinished, CommandStarted, ContextCollected
 from agentsh.history_security import ensure_secure_file
 from agentsh.models import CommandResult, JsonValue, Message
+from agentsh.permissions import (
+    PermissionDeniedError,
+    PermissionLevel,
+    tool_call_key,
+)
 
 _PREVIEW_MAX_CHARS = 2000
 
@@ -91,17 +100,6 @@ class UI:
 
 async def run_repl(app: App) -> None:
     """Run the main REPL loop until EOF or KeyboardInterrupt."""
-    import time
-
-    from agentsh.agent_loop import AgentLoopLimitError, run_agent_loop
-    from agentsh.classifier import InputKind, agent_query, classify
-    from agentsh.events import CommandFinished, CommandStarted, ContextCollected
-    from agentsh.permissions import (
-        PermissionDeniedError,
-        PermissionLevel,
-        tool_call_key,
-    )
-
     history_dir = Path.home() / ".local" / "share" / "agentsh"
     history_path = history_dir / "history"
     ensure_secure_file(history_path)
@@ -180,7 +178,6 @@ async def run_repl(app: App) -> None:
                         context=context,
                         tools=app.tools,
                         permissions=app.permissions,
-                        ui=ui,
                         event_bus=bus,
                     )
                     ui.render(final)
