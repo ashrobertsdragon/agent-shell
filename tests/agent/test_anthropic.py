@@ -3,11 +3,12 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from agentsh.agent.anthropic import AnthropicAgent
+from agentsh.agent.anthropic import _WEB_FETCH_TOOL, AnthropicAgent
 
 from agentsh.config import AgentConfig
 from agentsh.context.sanitize import render_context_fragment
 from agentsh.models import ContextFragment, Message
+from agentsh.tools import SchemaDict
 
 FRAGMENT_SPY_TARGET = "agentsh.agent._system.render_context_fragment"
 
@@ -187,6 +188,83 @@ async def test_respond_reuses_system_prompt_for_same_context_object(
         await agent.respond(conversation=[], context=context, tools=[])
 
     assert spy.call_count == 1
+
+
+async def test_respond_adds_web_fetch_tool_when_enabled(
+    text_response: MagicMock,
+) -> None:
+    """web_fetch=True appends Anthropic's server-side web fetch tool."""
+    config = AgentConfig(model="claude-haiku-4-5-20251001", web_fetch=True)
+    agent = AnthropicAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    with patch.object(agent._client.messages, "create", new=mock_create):
+        await agent.respond(
+            conversation=[Message(role="user", content="hello")],
+            context=[],
+            tools=[],
+        )
+
+    sent_tools = mock_create.call_args.kwargs["tools"]
+    assert any(
+        t.get("type") == "web_fetch_20260318" and t.get("name") == "web_fetch"
+        for t in sent_tools
+    )
+
+
+async def test_respond_appends_web_fetch_tool_after_user_tools_when_enabled(
+    text_response: MagicMock,
+) -> None:
+    """web_fetch=True appends the web fetch tool after user tools and
+    marks only it (the new last tool) as the cache breakpoint, without
+    mutating the caller's own tool dicts or the shared module-level
+    web fetch tool template across calls.
+    """
+    config = AgentConfig(model="claude-haiku-4-5-20251001", web_fetch=True)
+    agent = AnthropicAgent(config)
+    user_tools: list[SchemaDict] = [
+        {
+            "name": "A",
+            "description": "a",
+            "input_schema": {},  # type: ignore[typeddict-item]
+        }
+    ]
+    mock_create = AsyncMock(return_value=text_response)
+
+    with patch.object(agent._client.messages, "create", new=mock_create):
+        await agent.respond(
+            conversation=[Message(role="user", content="hello")],
+            context=[],
+            tools=user_tools,
+        )
+        await agent.respond(
+            conversation=[Message(role="user", content="hello again")],
+            context=[],
+            tools=user_tools,
+        )
+
+    sent_tools = mock_create.call_args.kwargs["tools"]
+    assert "cache_control" not in sent_tools[0]
+    assert sent_tools[-1]["type"] == "web_fetch_20260318"
+    assert sent_tools[-1]["cache_control"] == {"type": "ephemeral"}
+
+    assert "cache_control" not in _WEB_FETCH_TOOL
+
+
+async def test_respond_omits_web_fetch_tool_by_default(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """web_fetch=False (the default) sends no web fetch tool."""
+    agent = AnthropicAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    with patch.object(agent._client.messages, "create", new=mock_create):
+        await agent.respond(
+            conversation=[Message(role="user", content="hello")],
+            context=[],
+            tools=[],
+        )
+
+    sent_tools = mock_create.call_args.kwargs["tools"]
+    assert not any(t.get("type") == "web_fetch_20260318" for t in sent_tools)
 
 
 async def test_respond_rebuilds_system_prompt_for_a_new_turn(

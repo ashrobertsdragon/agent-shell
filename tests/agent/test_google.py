@@ -160,6 +160,40 @@ async def test_respond_rebuilds_system_instruction_for_a_new_turn(
     assert spy.call_count == 2
 
 
+async def test_respond_adds_url_context_tool_when_web_fetch_enabled(
+    text_response: MagicMock,
+) -> None:
+    """web_fetch=True adds Google's URL-context (web fetch) tool."""
+    config = AgentConfig(model="gemini-2.0-flash", web_fetch=True)
+    agent = GoogleAgent(config)
+    mock_generate = AsyncMock(return_value=text_response)
+    with patch.object(
+        agent._client.aio.models, "generate_content", new=mock_generate
+    ):
+        await agent.respond(conversation=[], context=[], tools=[])
+
+    sent_config = mock_generate.call_args.kwargs["config"]
+    assert sent_config.tools is not None
+    assert any(
+        getattr(t, "url_context", None) is not None for t in sent_config.tools
+    )
+
+
+async def test_respond_omits_url_context_tool_by_default(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """web_fetch=False (the default) sends no URL-context tool."""
+    agent = GoogleAgent(config)
+    mock_generate = AsyncMock(return_value=text_response)
+    with patch.object(
+        agent._client.aio.models, "generate_content", new=mock_generate
+    ):
+        await agent.respond(conversation=[], context=[], tools=[])
+
+    sent_config = mock_generate.call_args.kwargs["config"]
+    assert sent_config.tools is None
+
+
 async def test_respond_reuses_tool_declarations_for_same_tools_object(
     config: AgentConfig, text_response: MagicMock
 ) -> None:

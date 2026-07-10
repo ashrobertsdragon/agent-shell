@@ -152,6 +152,37 @@ async def test_respond_sends_a_stable_prompt_cache_key(
     assert first_key == second_key
 
 
+async def test_respond_sends_web_search_options_when_web_fetch_enabled(
+    monkeypatch: pytest.MonkeyPatch, text_response: MagicMock
+) -> None:
+    """web_fetch=True enables OpenAI's web search / browsing tool."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    config = AgentConfig(model="gpt-4o", web_fetch=True)
+    agent = OpenaiAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    with patch.object(
+        agent._client.chat.completions, "create", new=mock_create
+    ):
+        await agent.respond(conversation=[], context=[], tools=[])
+
+    assert mock_create.call_args.kwargs["web_search_options"] == {}
+
+
+async def test_respond_omits_web_search_options_by_default(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """web_fetch=False (the default) does not enable web search."""
+    agent = OpenaiAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    with patch.object(
+        agent._client.chat.completions, "create", new=mock_create
+    ):
+        await agent.respond(conversation=[], context=[], tools=[])
+
+    sent = mock_create.call_args.kwargs["web_search_options"]
+    assert bool(sent) is False
+
+
 async def test_respond_reuses_system_message_for_same_context_object(
     config: AgentConfig, text_response: MagicMock
 ) -> None:

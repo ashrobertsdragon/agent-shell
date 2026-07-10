@@ -203,6 +203,32 @@ async def test_respond_marks_last_message_as_cache_breakpoint(
     assert last_content[-1]["cache_control"] == {"type": "ephemeral"}
 
 
+async def test_respond_sends_web_fetch_plugin_when_enabled(
+    text_response: MagicMock,
+) -> None:
+    """web_fetch=True enables OpenRouter's web-fetch plugin."""
+    config = AgentConfig(model="openai/gpt-4o", web_fetch=True)
+    agent = OpenrouterAgent(config)
+    mock_send = AsyncMock(return_value=text_response)
+    with patch.object(agent._client.chat, "send_async", new=mock_send):
+        await agent.respond(conversation=[], context=[], tools=[])
+
+    sent_plugins = mock_send.call_args.kwargs["plugins"]
+    assert sent_plugins == [{"id": "web-fetch"}]
+
+
+async def test_respond_omits_web_fetch_plugin_by_default(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """web_fetch=False (the default) sends no plugins."""
+    agent = OpenrouterAgent(config)
+    mock_send = AsyncMock(return_value=text_response)
+    with patch.object(agent._client.chat, "send_async", new=mock_send):
+        await agent.respond(conversation=[], context=[], tools=[])
+
+    assert mock_send.call_args.kwargs["plugins"] is None
+
+
 async def test_respond_reuses_system_prompt_for_same_context_object(
     config: AgentConfig, text_response: MagicMock
 ) -> None:

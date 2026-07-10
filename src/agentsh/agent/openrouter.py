@@ -1,4 +1,13 @@
-"""OpenRouter backend."""
+"""OpenRouter backend.
+
+When `AgentConfig.web_fetch` is enabled, this backend enables
+OpenRouter's `web-fetch` plugin, which lets the routed model fetch the
+content of URLs. That plugin runs on OpenRouter's infrastructure -- it
+never passes through `PermissionEngine.evaluate()` or any other tool in
+`agentsh.tools`, so enabling `web_fetch` intentionally bypasses the
+permission engine for outbound web fetches. This is a documented
+exception, not an oversight: see `docs/security.md` for the rationale.
+"""
 
 import json
 
@@ -7,6 +16,7 @@ from openrouter.components import (
     ChatAssistantMessageTypedDict,
     ChatContentCacheControlTypedDict,
     ChatFunctionToolTypedDict,
+    ChatRequestPluginTypedDict,
     ChatSystemMessageTypedDict,
     ChatToolCallFunctionTypedDict,
     ChatToolCallTypedDict,
@@ -140,6 +150,11 @@ class OpenrouterAgent(Agent):
         Anthropic-style cache_control field (notably Anthropic models
         routed through OpenRouter) can serve the static prefix from
         cache instead of reprocessing it each iteration.
+
+        When `self._config.web_fetch` is set, OpenRouter's `web-fetch`
+        plugin is sent with the request. It executes on OpenRouter's
+        infrastructure and never reaches `agentsh.tools` or the
+        permission engine -- see the module docstring.
         """
 
         def _build_tools() -> list[ChatFunctionToolTypedDict]:
@@ -182,18 +197,24 @@ class OpenrouterAgent(Agent):
         if len(messages) > 1:
             messages[-1] = _mark_cache_breakpoint(messages[-1])
 
+        plugins: list[ChatRequestPluginTypedDict] | None = (
+            [{"id": "web-fetch"}] if self._config.web_fetch else None
+        )
+
         if or_tools:
             response = await self._client.chat.send_async(
                 model=self._config.model,
                 messages=messages,
                 tools=or_tools,
                 max_tokens=self._config.max_tokens,
+                plugins=plugins,
             )
         else:
             response = await self._client.chat.send_async(
                 model=self._config.model,
                 messages=messages,
                 max_tokens=self._config.max_tokens,
+                plugins=plugins,
             )
 
         choice = response.choices[0].message
