@@ -9,7 +9,7 @@ from agentsh.config import AgentConfig
 from agentsh.context.sanitize import render_context_fragment
 from agentsh.models import ContextFragment, Message
 
-FRAGMENT_SPY_TARGET = "agentsh.agent.openai.render_context_fragment"
+FRAGMENT_SPY_TARGET = "agentsh.agent._system.render_context_fragment"
 
 
 def _fragment(provider: str = "git") -> ContextFragment:

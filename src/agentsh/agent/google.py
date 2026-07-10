@@ -6,19 +6,12 @@ from collections.abc import Mapping
 from google import genai
 from google.genai import types
 
-from agentsh.agent import SYSTEM_PREFIX, Agent
+from agentsh.agent._system import _build_system
+from agentsh.agent.base import Agent
 from agentsh.agent.caching import IdentityCache
 from agentsh.config import AgentConfig
-from agentsh.context.sanitize import render_context_fragment
 from agentsh.models import ContextFragment, Message, ToolCall
 from agentsh.tools import SchemaDict
-
-
-def _build_system(context: list[ContextFragment]) -> str:
-    """Combine the base system prompt with sanitized context fragments."""
-    parts = [SYSTEM_PREFIX]
-    parts.extend(render_context_fragment(frag) for frag in context)
-    return "\n".join(parts)
 
 
 def _get_genai_type(t: object) -> types.Type:
