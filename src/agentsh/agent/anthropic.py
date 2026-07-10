@@ -134,7 +134,7 @@ class AnthropicAgent(Agent):
                 for t in tools
             ]
             if self._config.web_fetch:
-                built.append(_WEB_FETCH_TOOL)
+                built.append(_WEB_FETCH_TOOL.copy())
             if built:
                 built[-1]["cache_control"] = _EPHEMERAL_CACHE  # type: ignore[typeddict-item]
             return built
