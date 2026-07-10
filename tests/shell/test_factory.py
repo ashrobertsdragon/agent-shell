@@ -8,9 +8,9 @@ from agentsh.shell import UnsupportedShellError, create_shell
 def test_create_shell_unsupported_name_raises_with_guidance() -> None:
     """An unregistered shell name produces a clear, actionable error."""
     with pytest.raises(UnsupportedShellError) as exc_info:
-        create_shell("zsh")
+        create_shell("tcsh")
     message = str(exc_info.value)
-    assert "zsh" in message
+    assert "tcsh" in message
     assert "bash" in message
     assert "config.toml" in message
 

@@ -1,8 +1,8 @@
 # agentsh
 
 `agentsh` is a shell wrapper that routes each line you type to either a
-real shell subprocess (bash, PowerShell, or cmd.exe) or an LLM agent with
-tool access to that shell.
+real shell subprocess (bash, zsh, PowerShell, or cmd.exe) or an LLM agent
+with tool access to that shell.
 
 Type something that parses as valid shell syntax and it runs exactly as
 if you'd typed it into the shell directly — `cd`, environment variables,
@@ -19,7 +19,7 @@ engine that can allow, ask for confirmation, or deny it before it runs.
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- One of: bash, PowerShell, or cmd.exe on `PATH`
+- One of: bash, zsh, PowerShell, or cmd.exe on `PATH`
 - An API key for at least one supported LLM provider (see below)
 
 ## Install
@@ -65,11 +65,12 @@ a one-line error rather than a traceback.
 
 ## Shell backends
 
-Three shells are currently supported, registered under these names:
+Four shells are currently supported, registered under these names:
 
 | Backend    | Registered name | Detected via                    |
 | ---------- | --------------- | ------------------------------- |
 | Bash       | `bash`          | `$SHELL` (basename of the path) |
+| Zsh        | `zsh`           | `$SHELL` (basename of the path) |
 | PowerShell | `powershell`    | `$PSModulePath` present         |
 | cmd.exe    | `cmd`           | `$CMDCMDLINE` present           |
 
