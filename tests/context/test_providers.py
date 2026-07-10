@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agentsh.context.providers import filesystem as filesystem_module
+from agentsh.context.providers import network as network_module
 from agentsh.context.providers.docker import DockerProvider
 from agentsh.context.providers.environment import EnvironmentProvider
 from agentsh.context.providers.filesystem import FilesystemProvider
@@ -14,6 +15,7 @@ from agentsh.context.providers.git import GitProvider
 from agentsh.context.providers.go import GoProvider
 from agentsh.context.providers.history import HistoryProvider
 from agentsh.context.providers.kubernetes import KubernetesProvider
+from agentsh.context.providers.network import NetworkProvider
 from agentsh.context.providers.node import NodeProvider
 from agentsh.context.providers.python import PythonProvider
 from agentsh.context.providers.rust import RustProvider
@@ -893,6 +895,44 @@ async def test_rust_provider_returns_none_without_toolchain(
     assert result is None
 
 
+_LINUX_NETSTAT = """\
+Proto Recv-Q Send-Q Local Address           Foreign Address         State
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN
+tcp6       0      0 :::80                   :::*                    LISTEN
+udp        0      0 0.0.0.0:68              0.0.0.0:*
+"""
+
+_BSD_NETSTAT = """\
+Active Internet connections (including servers)
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
+tcp4       0      0  127.0.0.1.8080         *.*                    LISTEN
+tcp6       0      0  ::1.8080               *.*                    LISTEN
+"""
+
+_WINDOWS_NETSTAT = """\
+  Proto  Local Address          Foreign Address        State
+  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING
+"""
+
+
+async def test_network_provider_returns_none_without_netstat(
+    shell: MagicMock,
+) -> None:
+    """NetworkProvider returns None when netstat is unavailable."""
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="",
+            stderr="command not found",
+            exit_code=127,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = NetworkProvider()
+    result = await provider.collect(shell)
+    assert result is None
+
+
 async def test_rust_provider_returns_toolchain_without_cargo_toml(
     shell: MagicMock, tmp_path: Path
 ) -> None:
@@ -1013,5 +1053,185 @@ async def test_rust_provider_commands_are_shell_portable(
     shell.execute = execute
     shell.cwd = str(tmp_path)
     await RustProvider().collect(shell)
+    assert commands
+    assert all("/dev/null" not in c for c in commands)
+
+
+async def test_network_provider_parses_linux_listen_ports(
+    shell: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetworkProvider parses GNU/Linux netstat's colon-delimited ports."""
+    monkeypatch.setattr(
+        network_module, "_has_active_network_route", lambda: True
+    )
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout=_LINUX_NETSTAT,
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = NetworkProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    ports = result.payload["listening_ports"]
+    assert isinstance(ports, list)
+    assert {"proto": "tcp", "port": 22} in ports
+    assert {"proto": "tcp6", "port": 80} in ports
+    assert len(ports) == 2
+
+
+async def test_network_provider_parses_bsd_dot_style_ports(
+    shell: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetworkProvider parses BSD (macOS) netstat's dot-delimited ports."""
+    monkeypatch.setattr(
+        network_module, "_has_active_network_route", lambda: True
+    )
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout=_BSD_NETSTAT,
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = NetworkProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    ports = result.payload["listening_ports"]
+    assert isinstance(ports, list)
+    assert {"proto": "tcp4", "port": 8080} in ports
+    assert {"proto": "tcp6", "port": 8080} in ports
+    assert len(ports) == 2
+
+
+async def test_network_provider_parses_windows_listening_state(
+    shell: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetworkProvider recognizes Windows netstat's ``LISTENING`` state."""
+    monkeypatch.setattr(
+        network_module, "_has_active_network_route", lambda: True
+    )
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout=_WINDOWS_NETSTAT,
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="C:\\Users\\agentsh",
+        )
+    )
+    provider = NetworkProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    ports = result.payload["listening_ports"]
+    assert isinstance(ports, list)
+    assert {"proto": "tcp", "port": 135} in ports
+    assert len(ports) == 1
+
+
+async def test_network_provider_reports_connectivity_true(
+    shell: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetworkProvider reports network_up True when a route exists."""
+    monkeypatch.setattr(
+        network_module, "_has_active_network_route", lambda: True
+    )
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout=_LINUX_NETSTAT,
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = NetworkProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["network_up"] is True
+    assert "up" in result.summary
+
+
+async def test_network_provider_reports_connectivity_false(
+    shell: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetworkProvider reports network_up False without a non-loopback route."""
+    monkeypatch.setattr(
+        network_module, "_has_active_network_route", lambda: False
+    )
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout=_LINUX_NETSTAT,
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = NetworkProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["network_up"] is False
+    assert "down" in result.summary
+
+
+async def test_network_provider_ignores_non_listen_lines(
+    shell: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetworkProvider ignores UDP rows and established connections.
+
+    Neither has a reliable ``LISTEN``-style state token across all
+    three netstat dialects, so they are excluded rather than
+    misreported (see ``NetworkProvider.collect`` docstring).
+    """
+    monkeypatch.setattr(
+        network_module, "_has_active_network_route", lambda: True
+    )
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout=(
+                "tcp        0      0 127.0.0.1:5432          "
+                "10.0.0.5:51000          ESTABLISHED\n"
+                "udp        0      0 0.0.0.0:68              "
+                "0.0.0.0:*\n"
+            ),
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = NetworkProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["listening_ports"] == []
+
+
+async def test_network_provider_commands_are_shell_portable(
+    shell: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetworkProvider never embeds POSIX-only redirection in its commands."""
+    monkeypatch.setattr(
+        network_module, "_has_active_network_route", lambda: True
+    )
+    commands: list[str] = []
+
+    async def execute(command: str) -> CommandResult:
+        commands.append(command)
+        return CommandResult(
+            stdout=_LINUX_NETSTAT,
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+
+    shell.execute = execute
+    await NetworkProvider().collect(shell)
     assert commands
     assert all("/dev/null" not in c for c in commands)
