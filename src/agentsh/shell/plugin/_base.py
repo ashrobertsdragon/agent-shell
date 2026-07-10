@@ -1,6 +1,6 @@
 """Shared process lifecycle and sentinel helpers for shell backends.
 
-All persistent shell backends (bash, cmd, powershell) drive a subprocess
+All persistent shell backends (bash, zsh, cmd, powershell) drive a subprocess
 over stdin/stdout and detect command completion by writing a sentinel
 line after the user's command and reading stdout until that line
 appears. Two properties of that protocol matter for correctness:

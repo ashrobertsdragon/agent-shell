@@ -24,7 +24,7 @@ the parsed table straight into the corresponding dataclass constructor.
 # Which shell backend to drive. "auto" detects from environment
 # variables ($SHELL, $PSModulePath, $CMDCMDLINE); set explicitly to skip
 # detection or to force a backend detection wouldn't pick.
-shell = "auto"  # "auto" | "bash" | "cmd" | "powershell"
+shell = "auto"  # "auto" | "bash" | "zsh" | "cmd" | "powershell"
 
 [agent]
 # Model identifier passed straight through to the provider's SDK.
@@ -80,18 +80,18 @@ in TOML (not a top-level `[permissions]` table with `allow`/`confirm`/
 
 ## Field reference
 
-| Key                         | Type                         | Default                                                               | Notes                                          |
-| --------------------------- | ---------------------------- | --------------------------------------------------------------------- | ---------------------------------------------- |
-| `shell`                     | string                       | `"auto"`                                                              | `"auto"`, `"bash"`, `"cmd"`, or `"powershell"` |
-| `agent.model`               | string                       | `"claude-sonnet-4-6"`                                                 | Passed to the provider SDK verbatim            |
-| `agent.provider`            | string                       | `"anthropic"`                                                         | Selects `agentsh.agent.<provider>`             |
-| `agent.web_fetch`           | bool                         | `false`                                                               | Reserved; not wired to a backend yet           |
-| `agent.max_tokens`          | int                          | `4096`                                                                | Passed to the provider SDK                     |
-| `context.timeout_ms`        | int                          | `200`                                                                 | Per-provider collection timeout                |
-| `context.providers`         | list[string]                 | `["git", "filesystem", "python", "docker", "history", "environment"]` | Order is preserved                             |
-| `permissions.rules.allow`   | list[string] (fnmatch globs) | `[]`                                                                  |                                                |
-| `permissions.rules.confirm` | list[string] (fnmatch globs) | `[]`                                                                  |                                                |
-| `permissions.rules.deny`    | list[string] (fnmatch globs) | `[]`                                                                  | Checked first                                  |
+| Key                         | Type                         | Default                                                               | Notes                                                   |
+| --------------------------- | ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------- |
+| `shell`                     | string                       | `"auto"`                                                              | `"auto"`, `"bash"`, `"zsh"`, `"cmd"`, or `"powershell"` |
+| `agent.model`               | string                       | `"claude-sonnet-4-6"`                                                 | Passed to the provider SDK verbatim                     |
+| `agent.provider`            | string                       | `"anthropic"`                                                         | Selects `agentsh.agent.<provider>`                      |
+| `agent.web_fetch`           | bool                         | `false`                                                               | Reserved; not wired to a backend yet                    |
+| `agent.max_tokens`          | int                          | `4096`                                                                | Passed to the provider SDK                              |
+| `context.timeout_ms`        | int                          | `200`                                                                 | Per-provider collection timeout                         |
+| `context.providers`         | list[string]                 | `["git", "filesystem", "python", "docker", "history", "environment"]` | Order is preserved                                      |
+| `permissions.rules.allow`   | list[string] (fnmatch globs) | `[]`                                                                  |                                                         |
+| `permissions.rules.confirm` | list[string] (fnmatch globs) | `[]`                                                                  |                                                         |
+| `permissions.rules.deny`    | list[string] (fnmatch globs) | `[]`                                                                  | Checked first                                           |
 
 ## Environment variables
 
@@ -99,11 +99,12 @@ Configuration is TOML-only, but one behavior is controlled by an
 environment variable rather than `config.toml`:
 
 - `AGENTSH_MIRROR_HISTFILE` — when set to a truthy value (`1`, `true`,
-  `yes`, or `on`, case-insensitive), the bash backend additionally mirrors
-  every command into your shell's native history file (`$HISTFILE`, or
-  `~/.bash_history`), for continuity with tools that read your shell's
-  own history. This is opt-in because that file is not one `agentsh`
-  hardens to mode `0600` — see [security.md](security.md).
+  `yes`, or `on`, case-insensitive), the bash and zsh backends additionally
+  mirror every command into your shell's native history file (`$HISTFILE`,
+  defaulting to `~/.bash_history` or `~/.zsh_history` respectively), for
+  continuity with tools that read your shell's own history. This is
+  opt-in because that file is not one `agentsh` hardens to mode `0600` —
+  see [security.md](security.md).
 
 ## Where else state lives
 
@@ -111,6 +112,7 @@ environment variable rather than `config.toml`:
   at `~/.local/share/agentsh/history`, separate from any shell-native
   history file, and is created/maintained with mode `0600`.
 - The bash backend additionally reads/writes `~/.config/agentsh/bash_history`
-  for its own `history()`/`append_history()` implementation.
+  for its own `history()`/`append_history()` implementation, and the zsh
+  backend does the same at `~/.config/agentsh/zsh_history`.
 
 Neither of these paths is currently configurable.
