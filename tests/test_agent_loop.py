@@ -45,14 +45,6 @@ def _registry(invoke_result: object = "ok") -> MagicMock:
 
 
 @pytest.fixture
-def ui() -> MagicMock:
-    """UI mock that auto-confirms all prompts."""
-    m = MagicMock()
-    m.confirm = AsyncMock(return_value=True)
-    return m
-
-
-@pytest.fixture
 def allow_perms() -> MagicMock:
     """PermissionEngine mock that ALLOWs every key."""
     perms = MagicMock()
@@ -67,7 +59,6 @@ def bus() -> EventBus:
 
 
 async def test_text_only_returns_immediately(
-    ui: MagicMock,
     allow_perms: MagicMock,
     bus: EventBus,
 ) -> None:
@@ -82,7 +73,6 @@ async def test_text_only_returns_immediately(
         context=[],
         tools=_registry(),
         permissions=allow_perms,
-        ui=ui,
         event_bus=bus,
     )
 
@@ -91,7 +81,6 @@ async def test_text_only_returns_immediately(
 
 
 async def test_tool_call_executes_and_loop_continues(
-    ui: MagicMock,
     allow_perms: MagicMock,
     bus: EventBus,
 ) -> None:
@@ -111,7 +100,6 @@ async def test_tool_call_executes_and_loop_continues(
         context=[],
         tools=registry,
         permissions=allow_perms,
-        ui=ui,
         event_bus=bus,
     )
 
@@ -121,7 +109,6 @@ async def test_tool_call_executes_and_loop_continues(
 
 
 async def test_deny_injects_error_tool_result(
-    ui: MagicMock,
     bus: EventBus,
 ) -> None:
     """A DENY-blocked call injects an error ToolResult so the agent can recover."""
@@ -141,7 +128,6 @@ async def test_deny_injects_error_tool_result(
         context=[],
         tools=registry,
         permissions=perms,
-        ui=ui,
         event_bus=bus,
     )
 
@@ -152,7 +138,6 @@ async def test_deny_injects_error_tool_result(
 
 
 async def test_permission_denied_from_tool_injects_error_tool_result(
-    ui: MagicMock,
     bus: EventBus,
 ) -> None:
     """CONFIRM enforcement now lives inside the tool's own invoke(); when it
@@ -184,7 +169,6 @@ async def test_permission_denied_from_tool_injects_error_tool_result(
         context=[],
         tools=registry,
         permissions=perms,
-        ui=ui,
         event_bus=bus,
     )
 
@@ -196,7 +180,6 @@ async def test_permission_denied_from_tool_injects_error_tool_result(
 
 
 async def test_tools_schemas_computed_once_per_turn(
-    ui: MagicMock,
     allow_perms: MagicMock,
     bus: EventBus,
 ) -> None:
@@ -222,7 +205,6 @@ async def test_tools_schemas_computed_once_per_turn(
         context=[],
         tools=registry,
         permissions=allow_perms,
-        ui=ui,
         event_bus=bus,
     )
 
@@ -232,7 +214,6 @@ async def test_tools_schemas_computed_once_per_turn(
 
 
 async def test_iteration_limit_raises(
-    ui: MagicMock,
     allow_perms: MagicMock,
     bus: EventBus,
 ) -> None:
@@ -249,7 +230,6 @@ async def test_iteration_limit_raises(
             context=[],
             tools=_registry(),
             permissions=allow_perms,
-            ui=ui,
             event_bus=bus,
             max_iterations=3,
         )

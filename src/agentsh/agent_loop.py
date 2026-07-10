@@ -10,7 +10,6 @@ from agentsh.permissions import (
     tool_call_key,
 )
 from agentsh.tools.protocol import ToolRegistry
-from agentsh.ui_protocol import UI
 
 
 class AgentLoopLimitError(Exception):
@@ -24,7 +23,6 @@ async def run_agent_loop(
     context: list[ContextFragment],
     tools: ToolRegistry,
     permissions: PermissionEngine,
-    ui: UI,
     event_bus: EventBus | None = None,
     max_iterations: int = 20,
 ) -> Message:

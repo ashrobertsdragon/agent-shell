@@ -178,7 +178,6 @@ async def run_repl(app: App) -> None:
                         context=context,
                         tools=app.tools,
                         permissions=app.permissions,
-                        ui=ui,
                         event_bus=bus,
                     )
                     ui.render(final)
