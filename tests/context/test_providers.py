@@ -11,6 +11,7 @@ from agentsh.context.providers.docker import DockerProvider
 from agentsh.context.providers.environment import EnvironmentProvider
 from agentsh.context.providers.filesystem import FilesystemProvider
 from agentsh.context.providers.git import GitProvider
+from agentsh.context.providers.go import GoProvider
 from agentsh.context.providers.history import HistoryProvider
 from agentsh.context.providers.kubernetes import KubernetesProvider
 from agentsh.context.providers.node import NodeProvider
@@ -612,5 +613,165 @@ async def test_node_provider_commands_are_shell_portable(
     shell.execute = execute
     shell.cwd = str(tmp_path)
     await NodeProvider().collect(shell)
+    assert commands
+    assert all("/dev/null" not in c for c in commands)
+
+
+def _go_version_result(version: str = "1.22.0") -> CommandResult:
+    """Build a CommandResult mimicking ``go version`` output."""
+    return CommandResult(
+        stdout=f"go version go{version} linux/amd64\n",
+        stderr="",
+        exit_code=0,
+        duration_ms=1,
+        cwd="/repo",
+    )
+
+
+def _go_missing_result() -> CommandResult:
+    """Build a CommandResult mimicking a missing ``go`` binary."""
+    return CommandResult(
+        stdout="",
+        stderr="go: command not found",
+        exit_code=127,
+        duration_ms=1,
+        cwd="/repo",
+    )
+
+
+async def test_go_provider_returns_version_and_module(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """GoProvider parses go.mod's module, go directive, and a single-line require."""
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(return_value=_go_version_result())
+    (tmp_path / "go.mod").write_text(
+        "module github.com/example/project\n"
+        "\n"
+        "go 1.21\n"
+        "\n"
+        "require github.com/pkg/errors v0.9.1\n"
+    )
+
+    provider = GoProvider()
+    result = await provider.collect(shell)
+
+    assert result is not None
+    assert result.payload["go_version"] == "1.22.0"
+    assert result.payload["module"] == "github.com/example/project"
+    assert result.payload["go_directive"] == "1.21"
+    assert result.payload["dependencies"] == [
+        {"path": "github.com/pkg/errors", "version": "v0.9.1"}
+    ]
+    assert result.payload["workspace_modules"] is None
+
+
+async def test_go_provider_parses_multiline_require_block(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """GoProvider parses a parenthesized require (...) block."""
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(return_value=_go_version_result())
+    (tmp_path / "go.mod").write_text(
+        "module github.com/example/project\n"
+        "\n"
+        "go 1.21\n"
+        "\n"
+        "require (\n"
+        "\tgithub.com/pkg/errors v0.9.1\n"
+        "\tgolang.org/x/net v0.20.0 // indirect\n"
+        ")\n"
+    )
+
+    provider = GoProvider()
+    result = await provider.collect(shell)
+
+    assert result is not None
+    assert result.payload["dependencies"] == [
+        {"path": "github.com/pkg/errors", "version": "v0.9.1"},
+        {"path": "golang.org/x/net", "version": "v0.20.0"},
+    ]
+
+
+async def test_go_provider_parses_go_work_workspace(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """GoProvider reports member modules from a go.work workspace file."""
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(return_value=_go_version_result())
+    (tmp_path / "go.mod").write_text(
+        "module github.com/example/project\n\ngo 1.21\n"
+    )
+    (tmp_path / "go.work").write_text(
+        "go 1.21\n\nuse (\n\t./project\n\t./tool\n)\n"
+    )
+
+    provider = GoProvider()
+    result = await provider.collect(shell)
+
+    assert result is not None
+    assert result.payload["workspace_modules"] == ["./project", "./tool"]
+    assert "workspace" in result.summary
+
+
+async def test_go_provider_returns_fragment_without_go_mod(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """GoProvider still reports the installed version outside a Go project."""
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(return_value=_go_version_result())
+
+    provider = GoProvider()
+    result = await provider.collect(shell)
+
+    assert result is not None
+    assert result.payload["go_version"] == "1.22.0"
+    assert result.payload["module"] is None
+
+
+async def test_go_provider_returns_fragment_when_go_not_installed(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """GoProvider reports go.mod info even when the go binary is missing."""
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(return_value=_go_missing_result())
+    (tmp_path / "go.mod").write_text(
+        "module github.com/example/project\n\ngo 1.21\n"
+    )
+
+    provider = GoProvider()
+    result = await provider.collect(shell)
+
+    assert result is not None
+    assert result.payload["go_version"] is None
+    assert result.payload["module"] == "github.com/example/project"
+
+
+async def test_go_provider_returns_none_without_go_or_go_mod(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """GoProvider returns None when neither go nor go.mod is present."""
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(return_value=_go_missing_result())
+
+    provider = GoProvider()
+    result = await provider.collect(shell)
+
+    assert result is None
+
+
+async def test_go_provider_commands_are_shell_portable(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """GoProvider never embeds POSIX-only redirection in its commands."""
+    shell.cwd = str(tmp_path)
+    commands: list[str] = []
+
+    async def execute(command: str) -> CommandResult:
+        commands.append(command)
+        return _go_version_result()
+
+    shell.execute = execute
+    await GoProvider().collect(shell)
     assert commands
     assert all("/dev/null" not in c for c in commands)
