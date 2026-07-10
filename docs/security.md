@@ -23,6 +23,26 @@ directly bypassed the check. Every tool now calls
 `self._permissions.enforce(...)` itself, so there is exactly one gate and
 no way to route around it by calling a tool a different way.
 
+### `web_fetch` is a documented exception to the permission engine
+
+Setting `AgentConfig.web_fetch = True` (`config.toml`'s `[agent] web_fetch`) registers each provider's own *native, server-side*
+browsing/fetch capability on every request: Anthropic's `web_fetch`
+tool, OpenAI's `web_search_options`, Google's `url_context` tool, and
+OpenRouter's `web-fetch` plugin (see `agent/{anthropic,openai,google, openrouter}.py`). None of these are implemented as `agentsh.tools`
+objects, so none of them go through `PermissionEngine.evaluate()` --
+enabling `web_fetch` intentionally bypasses the permission engine for
+outbound web fetches, with no `allow`/`confirm`/`deny` rule able to
+gate them.
+
+This is an intentional trade-off, not an oversight: these are
+provider-hosted capabilities running on Anthropic/OpenAI/Google/
+OpenRouter infrastructure, not a shelled-out `curl` under `agentsh`'s
+own control, and each provider applies its own fetch-time restrictions
+(e.g. no local file access, no access to `agentsh`'s shell or
+filesystem). `web_fetch` defaults to `False`; only enable it if you
+trust the configured provider's browsing feature with the same
+latitude you'd give any other tool set to `ALLOW`.
+
 ### fnmatch and shell metacharacters
 
 `allow`/`confirm`/`deny` rules for `RunCommand` are glob patterns matched
@@ -147,14 +167,15 @@ LLM's context window.
 
 ## Known sharp edges (summary)
 
-| Area                                             | Mitigation                                            | What's *not* covered                                                                   |
-| ------------------------------------------------ | ----------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Permission rule bypass via chaining/substitution | Metacharacter blocklist forces `CONFIRM`              | Not a full shell grammar parser; write narrow `allow` rules                            |
-| Indirect prompt injection via context            | Escaping + boundary tags + model instructions         | Semantic (non-markup) injection is a model-level, not a technical, guarantee           |
-| Secrets in history files                         | `0600` on every file `agentsh` creates                | Native shell history files, only touched via opt-in mirroring; no hardening on Windows |
-| Symlink/path traversal on file tools             | Canonical path resolution before permission check     | —                                                                                      |
-| Shell desync corrupting subsequent commands      | Nonce'd sentinel + reset-on-timeout                   | —                                                                                      |
-| Unbounded output exhausting memory/context       | Output capped in the shell backend and again per-tool | —                                                                                      |
+| Area                                             | Mitigation                                                     | What's *not* covered                                                                   |
+| ------------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Permission rule bypass via chaining/substitution | Metacharacter blocklist forces `CONFIRM`                       | Not a full shell grammar parser; write narrow `allow` rules                            |
+| Indirect prompt injection via context            | Escaping + boundary tags + model instructions                  | Semantic (non-markup) injection is a model-level, not a technical, guarantee           |
+| Secrets in history files                         | `0600` on every file `agentsh` creates                         | Native shell history files, only touched via opt-in mirroring; no hardening on Windows |
+| Symlink/path traversal on file tools             | Canonical path resolution before permission check              | —                                                                                      |
+| Shell desync corrupting subsequent commands      | Nonce'd sentinel + reset-on-timeout                            | —                                                                                      |
+| Unbounded output exhausting memory/context       | Output capped in the shell backend and again per-tool          | —                                                                                      |
+| `web_fetch` bypasses the permission engine       | Defaults to `False`; provider-hosted, not a shelled-out `curl` | No `allow`/`confirm`/`deny` rule can gate it once enabled                              |
 
 If you're deploying `agentsh` somewhere the LLM or its context sources
 aren't fully trusted, prefer explicit `deny`/`confirm` rules over broad

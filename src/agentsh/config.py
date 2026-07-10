@@ -7,7 +7,17 @@ from pathlib import Path
 
 @dataclass
 class AgentConfig:
-    """Per-agent settings."""
+    """Per-agent settings.
+
+    `web_fetch`, when `True`, tells each backend (`agent/{anthropic,
+    openai,google,openrouter}.py`) to register that provider's native
+    server-side web-fetch/browsing capability on every request. That
+    capability runs on the provider's own infrastructure and does not
+    go through `agentsh.tools` or `PermissionEngine.evaluate()` --
+    enabling it is a documented, intentional bypass of the permission
+    engine for outbound web fetches. See docs/security.md for the
+    rationale. Defaults to `False`.
+    """
 
     model: str = "claude-sonnet-4-6"
     provider: str = "anthropic"

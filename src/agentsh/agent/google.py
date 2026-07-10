@@ -1,4 +1,14 @@
-"""Google GenAI backend."""
+"""Google GenAI backend.
+
+When `AgentConfig.web_fetch` is enabled, this backend registers
+Google's native `url_context` tool, which lets the model fetch the
+content of URLs it is given. That tool runs entirely on Google's
+infrastructure -- it never passes through `PermissionEngine.evaluate()`
+or any other tool in `agentsh.tools`, so enabling `web_fetch`
+intentionally bypasses the permission engine for outbound web fetches.
+This is a documented exception, not an oversight: see
+`docs/security.md` for the rationale.
+"""
 
 import uuid
 from collections.abc import Mapping
@@ -136,6 +146,12 @@ class GoogleAgent(Agent):
         uncertain savings, so this backend only eliminates the
         redundant Python-side rebuild every iteration and otherwise
         relies on implicit caching for any server-side benefit.
+
+        When `self._config.web_fetch` is set, Google's server-side
+        `url_context` tool is appended after the caller's own tools. It
+        executes on Google's infrastructure and never reaches
+        `agentsh.tools` or the permission engine -- see the module
+        docstring.
         """
 
         def _build_tools() -> list[
@@ -154,6 +170,8 @@ class GoogleAgent(Agent):
                     ]
                 )
                 built.append(tool)
+            if self._config.web_fetch:
+                built.append(types.Tool(url_context=types.UrlContext()))
             return built
 
         google_tools = self._tools_cache.get_or_build(tools, _build_tools)

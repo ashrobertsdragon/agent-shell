@@ -1,4 +1,14 @@
-"""OpenAI backend."""
+"""OpenAI backend.
+
+When `AgentConfig.web_fetch` is enabled, this backend sends OpenAI's
+`web_search_options` request parameter, which turns on the model's
+native browsing capability. That capability runs on OpenAI's
+infrastructure -- it never passes through `PermissionEngine.evaluate()`
+or any other tool in `agentsh.tools`, so enabling `web_fetch`
+intentionally bypasses the permission engine for outbound web fetches.
+This is a documented exception, not an oversight: see
+`docs/security.md` for the rationale.
+"""
 
 import json
 import uuid
@@ -13,6 +23,7 @@ from openai.types.chat import (
     ChatCompletionToolParam,
     ChatCompletionUserMessageParam,
 )
+from openai.types.chat.completion_create_params import WebSearchOptions
 
 from agentsh.agent._system import _build_system
 from agentsh.agent.base import Agent, register
@@ -113,6 +124,12 @@ class OpenaiAgent(Agent):
         iteration -- so the system message and converted tool list are
         memoized by object identity rather than rebuilt on every one of
         up to 20 iterations.
+
+        When `self._config.web_fetch` is set, `web_search_options` is
+        sent with the request, enabling OpenAI's native browsing tool.
+        It runs on OpenAI's infrastructure and never reaches
+        `agentsh.tools` or the permission engine -- see the module
+        docstring.
         """
 
         def _build_tools() -> list[ChatCompletionToolParam]:
@@ -142,6 +159,10 @@ class OpenaiAgent(Agent):
         for m in conversation:
             messages.extend(_message_to_openai(m))
 
+        web_search_options: WebSearchOptions | openai.Omit = (
+            {} if self._config.web_fetch else openai.omit
+        )
+
         if openai_tools:
             response = await self._client.chat.completions.create(
                 model=self._config.model,
@@ -149,6 +170,7 @@ class OpenaiAgent(Agent):
                 tools=openai_tools,
                 max_tokens=self._config.max_tokens,
                 prompt_cache_key=self._prompt_cache_key,
+                web_search_options=web_search_options,
             )
         else:
             response = await self._client.chat.completions.create(
@@ -156,6 +178,7 @@ class OpenaiAgent(Agent):
                 messages=messages,
                 max_tokens=self._config.max_tokens,
                 prompt_cache_key=self._prompt_cache_key,
+                web_search_options=web_search_options,
             )
 
         choice = response.choices[0].message

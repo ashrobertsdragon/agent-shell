@@ -189,6 +189,44 @@ async def test_respond_reuses_system_prompt_for_same_context_object(
     assert spy.call_count == 1
 
 
+async def test_respond_adds_web_fetch_tool_when_enabled(
+    text_response: MagicMock,
+) -> None:
+    """web_fetch=True appends Anthropic's server-side web fetch tool."""
+    config = AgentConfig(model="claude-haiku-4-5-20251001", web_fetch=True)
+    agent = AnthropicAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    with patch.object(agent._client.messages, "create", new=mock_create):
+        await agent.respond(
+            conversation=[Message(role="user", content="hello")],
+            context=[],
+            tools=[],
+        )
+
+    sent_tools = mock_create.call_args.kwargs["tools"]
+    assert any(
+        t.get("type") == "web_fetch_20260318" and t.get("name") == "web_fetch"
+        for t in sent_tools
+    )
+
+
+async def test_respond_omits_web_fetch_tool_by_default(
+    config: AgentConfig, text_response: MagicMock
+) -> None:
+    """web_fetch=False (the default) sends no web fetch tool."""
+    agent = AnthropicAgent(config)
+    mock_create = AsyncMock(return_value=text_response)
+    with patch.object(agent._client.messages, "create", new=mock_create):
+        await agent.respond(
+            conversation=[Message(role="user", content="hello")],
+            context=[],
+            tools=[],
+        )
+
+    sent_tools = mock_create.call_args.kwargs["tools"]
+    assert not any(t.get("type") == "web_fetch_20260318" for t in sent_tools)
+
+
 async def test_respond_rebuilds_system_prompt_for_a_new_turn(
     config: AgentConfig, text_response: MagicMock
 ) -> None:

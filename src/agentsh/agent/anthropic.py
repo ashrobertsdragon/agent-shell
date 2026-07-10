@@ -1,4 +1,13 @@
-"""Anthropic Claude backend."""
+"""Anthropic Claude backend.
+
+When `AgentConfig.web_fetch` is enabled, this backend registers
+Anthropic's native server-side `web_fetch` tool on every request. That
+tool runs entirely on Anthropic's infrastructure -- it never passes
+through `PermissionEngine.evaluate()` or any other tool in
+`agentsh.tools`, so enabling `web_fetch` intentionally bypasses the
+permission engine for outbound web fetches. This is a documented
+exception, not an oversight: see `docs/security.md` for the rationale.
+"""
 
 from typing import cast
 
@@ -7,9 +16,10 @@ from anthropic.types import (
     CacheControlEphemeralParam,
     MessageParam,
     TextBlockParam,
-    ToolParam,
     ToolResultBlockParam,
+    ToolUnionParam,
     ToolUseBlockParam,
+    WebFetchTool20260318Param,
 )
 
 from agentsh.agent._system import _build_system
@@ -20,6 +30,10 @@ from agentsh.models import ContextFragment, Message, ToolCall
 from agentsh.tools import SchemaDict
 
 _EPHEMERAL_CACHE: CacheControlEphemeralParam = {"type": "ephemeral"}
+_WEB_FETCH_TOOL: WebFetchTool20260318Param = {
+    "type": "web_fetch_20260318",
+    "name": "web_fetch",
+}
 
 
 def _message_to_anthropic(m: Message, *, cache: bool = False) -> MessageParam:
@@ -77,7 +91,7 @@ class AnthropicAgent(Agent):
         self._system_cache: IdentityCache[list[TextBlockParam]] = (
             IdentityCache()
         )
-        self._tools_cache: IdentityCache[list[ToolParam]] = IdentityCache()
+        self._tools_cache: IdentityCache[list[ToolUnionParam]] = IdentityCache()
 
     async def respond(
         self,
@@ -97,10 +111,16 @@ class AnthropicAgent(Agent):
         serve the static prefix -- tools, system prompt, and the
         already-seen conversation history -- from cache instead of
         reprocessing it each iteration.
+
+        When `self._config.web_fetch` is set, Anthropic's server-side
+        `web_fetch` tool is appended after the caller's own tools. It
+        executes on Anthropic's infrastructure and never reaches
+        `agentsh.tools` or the permission engine -- see the module
+        docstring.
         """
 
-        def _build_tools() -> list[ToolParam]:
-            built: list[ToolParam] = [
+        def _build_tools() -> list[ToolUnionParam]:
+            built: list[ToolUnionParam] = [
                 {
                     "name": t["name"],
                     "description": t["description"],
@@ -113,6 +133,8 @@ class AnthropicAgent(Agent):
                 }
                 for t in tools
             ]
+            if self._config.web_fetch:
+                built.append(_WEB_FETCH_TOOL)
             if built:
                 built[-1]["cache_control"] = _EPHEMERAL_CACHE  # type: ignore[typeddict-item]
             return built
