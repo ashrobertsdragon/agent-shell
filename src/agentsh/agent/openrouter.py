@@ -74,28 +74,21 @@ def _message_to_openrouter(m: Message) -> list[OpenRouterMessageDict]:
                 }
                 tool_calls.append(call)
 
-        if m.content and tool_calls is not None:
-            msg_asst1: ChatAssistantMessageTypedDict = {
-                "role": "assistant",
-                "content": m.content,
-                "tool_calls": tool_calls,
-            }
-            return [msg_asst1]
-        elif m.content:
-            msg_asst2: ChatAssistantMessageTypedDict = {
-                "role": "assistant",
-                "content": m.content,
-            }
-            return [msg_asst2]
-        elif tool_calls is not None:
-            msg_asst3: ChatAssistantMessageTypedDict = {
-                "role": "assistant",
-                "tool_calls": tool_calls,
-            }
-            return [msg_asst3]
-
-        msg_asst4: ChatAssistantMessageTypedDict = {"role": "assistant"}
-        return [msg_asst4]
+        msg_asst: ChatAssistantMessageTypedDict
+        match tool_calls, m.content:
+            case list() as calls, content if content:
+                msg_asst = {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": calls,
+                }
+            case None, content if content:
+                msg_asst = {"role": "assistant", "content": content}
+            case list() as calls, _:
+                msg_asst = {"role": "assistant", "tool_calls": calls}
+            case _:
+                msg_asst = {"role": "assistant"}
+        return [msg_asst]
 
     return []
 

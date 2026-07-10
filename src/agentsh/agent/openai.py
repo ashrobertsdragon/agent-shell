@@ -64,28 +64,21 @@ def _message_to_openai(m: Message) -> list[ChatCompletionMessageParam]:
                 }
                 tool_calls.append(call)
 
-        if m.content and tool_calls is not None:
-            msg_asst1: ChatCompletionAssistantMessageParam = {
-                "role": "assistant",
-                "content": m.content,
-                "tool_calls": tool_calls,
-            }
-            return [msg_asst1]
-        elif m.content:
-            msg_asst2: ChatCompletionAssistantMessageParam = {
-                "role": "assistant",
-                "content": m.content,
-            }
-            return [msg_asst2]
-        elif tool_calls is not None:
-            msg_asst3: ChatCompletionAssistantMessageParam = {
-                "role": "assistant",
-                "tool_calls": tool_calls,
-            }
-            return [msg_asst3]
-
-        msg_asst4: ChatCompletionAssistantMessageParam = {"role": "assistant"}
-        return [msg_asst4]
+        msg_asst: ChatCompletionAssistantMessageParam
+        match tool_calls, m.content:
+            case list() as calls, content if content:
+                msg_asst = {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": calls,
+                }
+            case None, content if content:
+                msg_asst = {"role": "assistant", "content": content}
+            case list() as calls, _:
+                msg_asst = {"role": "assistant", "tool_calls": calls}
+            case _:
+                msg_asst = {"role": "assistant"}
+        return [msg_asst]
 
     return []
 

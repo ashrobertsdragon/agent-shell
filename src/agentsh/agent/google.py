@@ -22,18 +22,21 @@ def _build_system(context: list[ContextFragment]) -> str:
 
 
 def _get_genai_type(t: object) -> types.Type:
+    """Map a JSON-schema type name to the matching GenAI schema type."""
     t_str = str(t).upper() if t else "OBJECT"
-    if t_str == "STRING":
-        return types.Type.STRING
-    if t_str == "INTEGER":
-        return types.Type.INTEGER
-    if t_str == "NUMBER":
-        return types.Type.NUMBER
-    if t_str == "BOOLEAN":
-        return types.Type.BOOLEAN
-    if t_str == "ARRAY":
-        return types.Type.ARRAY
-    return types.Type.OBJECT
+    match t_str:
+        case "STRING":
+            return types.Type.STRING
+        case "INTEGER":
+            return types.Type.INTEGER
+        case "NUMBER":
+            return types.Type.NUMBER
+        case "BOOLEAN":
+            return types.Type.BOOLEAN
+        case "ARRAY":
+            return types.Type.ARRAY
+        case _:
+            return types.Type.OBJECT
 
 
 def _build_google_schema(input_schema: Mapping[str, object]) -> types.Schema:
