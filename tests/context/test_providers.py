@@ -16,6 +16,7 @@ from agentsh.context.providers.history import HistoryProvider
 from agentsh.context.providers.kubernetes import KubernetesProvider
 from agentsh.context.providers.node import NodeProvider
 from agentsh.context.providers.python import PythonProvider
+from agentsh.context.providers.rust import RustProvider
 from agentsh.models import CommandResult
 
 
@@ -773,5 +774,244 @@ async def test_go_provider_commands_are_shell_portable(
 
     shell.execute = execute
     await GoProvider().collect(shell)
+    assert commands
+    assert all("/dev/null" not in c for c in commands)
+
+
+async def test_rust_provider_returns_fragment_with_toolchain_and_deps(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """RustProvider reports toolchain, package info, and dependencies."""
+    (tmp_path / "Cargo.toml").write_text(
+        """
+[package]
+name = "hello_cargo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+tokio = { version = "1.38", features = ["full"] }
+"""
+    )
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(
+        side_effect=[
+            CommandResult(
+                stdout="rustc 1.75.0 (82e1608df 2023-12-21)\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd=str(tmp_path),
+            ),
+            CommandResult(
+                stdout="cargo 1.75.0 (1d8b05cdd 2023-11-20)\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd=str(tmp_path),
+            ),
+            CommandResult(
+                stdout="stable-x86_64-unknown-linux-gnu (default)\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd=str(tmp_path),
+            ),
+        ]
+    )
+    provider = RustProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert (
+        result.payload["toolchain"]
+        == "stable-x86_64-unknown-linux-gnu (default)"
+    )
+    assert result.payload["package_name"] == "hello_cargo"
+    assert result.payload["package_version"] == "0.1.0"
+    dependencies = result.payload["dependencies"]
+    assert dependencies == {"serde": "1.0", "tokio": "1.38"}
+
+
+async def test_rust_provider_falls_back_to_rustc_version_without_rustup(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """RustProvider uses the raw rustc version string when rustup is absent.
+
+    rustc/cargo can be installed via a system package manager without
+    rustup, in which case there is no named toolchain to report.
+    """
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(
+        side_effect=[
+            CommandResult(
+                stdout="rustc 1.75.0 (82e1608df 2023-12-21)\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd=str(tmp_path),
+            ),
+            CommandResult(
+                stdout="cargo 1.75.0 (1d8b05cdd 2023-11-20)\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd=str(tmp_path),
+            ),
+            CommandResult(
+                stdout="",
+                stderr="rustup: command not found",
+                exit_code=127,
+                duration_ms=1,
+                cwd=str(tmp_path),
+            ),
+        ]
+    )
+    provider = RustProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["toolchain"] == "rustc 1.75.0 (82e1608df 2023-12-21)"
+    assert result.payload["package_name"] is None
+    assert result.payload["dependencies"] == {}
+
+
+async def test_rust_provider_returns_none_without_toolchain(
+    shell: MagicMock,
+) -> None:
+    """RustProvider returns None when neither rustc nor cargo is present."""
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="",
+            stderr="command not found",
+            exit_code=127,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = RustProvider()
+    result = await provider.collect(shell)
+    assert result is None
+
+
+async def test_rust_provider_returns_toolchain_without_cargo_toml(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """RustProvider still reports the toolchain outside a cargo project."""
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(
+        side_effect=[
+            CommandResult(
+                stdout="rustc 1.75.0 (82e1608df 2023-12-21)\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd=str(tmp_path),
+            ),
+            CommandResult(
+                stdout="cargo 1.75.0 (1d8b05cdd 2023-11-20)\n",
+                stderr="",
+                exit_code=0,
+                duration_ms=1,
+                cwd=str(tmp_path),
+            ),
+            CommandResult(
+                stdout="",
+                stderr="rustup: command not found",
+                exit_code=127,
+                duration_ms=1,
+                cwd=str(tmp_path),
+            ),
+        ]
+    )
+    provider = RustProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["package_name"] is None
+    assert result.payload["package_version"] is None
+    assert result.payload["dependencies"] == {}
+
+
+async def test_rust_provider_handles_malformed_cargo_toml(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """RustProvider ignores an unparseable Cargo.toml instead of raising."""
+    (tmp_path / "Cargo.toml").write_text("this is not valid toml [[[")
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="rustc 1.75.0 (82e1608df 2023-12-21)\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+    )
+    provider = RustProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["package_name"] is None
+    assert result.payload["dependencies"] == {}
+
+
+async def test_rust_provider_handles_workspace_and_pathonly_dependencies(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """RustProvider handles workspace-inherited and path-only dep tables.
+
+    A workspace-inherited dependency (``dep = { workspace = true }``)
+    carries no version at all, and a path dependency
+    (``dep = { path = "../foo" }``) likewise has no ``version`` key.
+    Neither shape should raise or be dropped from the dependency map.
+    """
+    (tmp_path / "Cargo.toml").write_text(
+        """
+[package]
+name = "hello_cargo"
+version = "0.1.0"
+
+[dependencies]
+serde = { workspace = true }
+local_crate = { path = "../local_crate" }
+"""
+    )
+    shell.cwd = str(tmp_path)
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="rustc 1.75.0 (82e1608df 2023-12-21)\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+    )
+    provider = RustProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload["dependencies"] == {
+        "serde": "workspace",
+        "local_crate": "*",
+    }
+
+
+async def test_rust_provider_commands_are_shell_portable(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """RustProvider never embeds POSIX-only redirection in its commands."""
+    shell.cwd = str(tmp_path)
+    commands: list[str] = []
+
+    async def execute(command: str) -> CommandResult:
+        commands.append(command)
+        return CommandResult(
+            stdout="rustc 1.75.0 (82e1608df 2023-12-21)\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+
+    shell.execute = execute
+    shell.cwd = str(tmp_path)
+    await RustProvider().collect(shell)
     assert commands
     assert all("/dev/null" not in c for c in commands)
