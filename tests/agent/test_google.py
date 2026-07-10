@@ -10,7 +10,7 @@ from agentsh.context.sanitize import render_context_fragment
 from agentsh.models import ContextFragment, Message
 from agentsh.tools import SchemaDict
 
-FRAGMENT_SPY_TARGET = "agentsh.agent.render_context_fragment"
+FRAGMENT_SPY_TARGET = "agentsh.agent._system.render_context_fragment"
 SCHEMA_SPY_TARGET = "agentsh.agent.google._build_google_schema"
 
 

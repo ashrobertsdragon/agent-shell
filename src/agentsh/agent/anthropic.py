@@ -12,7 +12,8 @@ from anthropic.types import (
     ToolUseBlockParam,
 )
 
-from agentsh.agent import Agent, _build_system
+from agentsh.agent._system import _build_system
+from agentsh.agent.base import Agent
 from agentsh.agent.caching import IdentityCache
 from agentsh.config import AgentConfig
 from agentsh.models import ContextFragment, Message, ToolCall
