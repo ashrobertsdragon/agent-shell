@@ -13,7 +13,7 @@ from anthropic.types import (
 )
 
 from agentsh.agent._system import _build_system
-from agentsh.agent.base import Agent
+from agentsh.agent.base import Agent, register
 from agentsh.agent.caching import IdentityCache
 from agentsh.config import AgentConfig
 from agentsh.models import ContextFragment, Message, ToolCall
@@ -66,6 +66,7 @@ def _message_to_anthropic(m: Message, *, cache: bool = False) -> MessageParam:
     return {"role": m.role, "content": content}  # type: ignore[typeddict-item]
 
 
+@register("anthropic")
 class AnthropicAgent(Agent):
     """LLM backend using the Anthropic Messages API."""
 

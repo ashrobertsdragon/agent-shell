@@ -1,9 +1,11 @@
 """Docker context provider — reports running containers."""
 
+from agentsh.context.providers import register
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 
 
+@register("docker")
 class DockerProvider:
     """Collects a list of running Docker containers."""
 

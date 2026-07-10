@@ -1,5 +1,6 @@
 """Environment context provider — reports safe environment variables."""
 
+from agentsh.context.providers import register
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 
@@ -29,6 +30,7 @@ _SAFE_ALLOWLIST = {
 }
 
 
+@register("environment")
 class EnvironmentProvider:
     """Collects non-sensitive environment variables from the shell."""
 

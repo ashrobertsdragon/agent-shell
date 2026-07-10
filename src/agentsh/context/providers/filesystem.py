@@ -3,6 +3,7 @@
 import asyncio
 import os
 
+from agentsh.context.providers import register
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 
@@ -21,6 +22,7 @@ def _list_entries(cwd: str) -> list[str]:
     return [e.name + ("/" if e.is_dir() else "") for e in entries[:_MAX_FILES]]
 
 
+@register("filesystem")
 class FilesystemProvider:
     """Collects a listing of the current working directory."""
 

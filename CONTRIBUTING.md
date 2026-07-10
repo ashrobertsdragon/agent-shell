@@ -56,12 +56,17 @@ holding the three built-in tools (`RunCommand`, `ReadFile`, `WriteFile`).
 The REPL (`src/agentsh/repl.py`) classifies each input line as `SHELL` or
 `AGENT` (`src/agentsh/classifier.py`) and routes accordingly. Three of the
 four pieces above — shells, context providers, and agent backends — are
-resolved *dynamically by name* from config, using the same pattern: a
-config string picks a module, and a fixed naming convention picks a class
-out of that module. That pattern is what makes each of them extensible
-without touching a central registry (for context providers and agent
-backends) or with a one-line decorator (for shells). The sections below
-cover each in turn.
+resolved *dynamically by name* from config, all through the same
+mechanism (`src/agentsh/registry.py`): a class is registered under a
+name via an explicit `@register("<name>")` decorator, and a config
+string picks it back out of that registry by name. Shell backends are
+discovered eagerly (every module in `shell/plugin/` is imported at
+startup); context providers and agent backends are resolved lazily,
+importing only the one module named by config, since agent backends in
+particular depend on optional per-provider SDKs that may not be
+installed. None of the three ever infers a class name from a naming
+convention — the decorator is the only source of truth. The sections
+below cover each in turn.
 
 ## Adding a shell backend
 
@@ -113,20 +118,16 @@ no separate registry file to edit.
 ## Adding a context provider
 
 Context providers live in `src/agentsh/context/providers/` and are
-resolved dynamically by name — the exact contract, quoted from
-`src/agentsh/context/providers/__init__.py`:
-
-> Adding a provider means adding a module here: the module
-> `agentsh.context.providers.<name>` must define a class named
-> `<Name>Provider`, mirroring how `Agent.from_provider` resolves LLM
-> backends.
+registered explicitly via a decorator, the same `@register("name")` +
+glob/lazy-discovery pattern used for shell plugins (see
+`src/agentsh/registry.py`) — not by guessing a class name from the
+module name.
 
 Concretely:
 
-1. Create `src/agentsh/context/providers/<name>.py` with
-   `class <Name>Provider:` (title-cased `<name>` + `Provider`, e.g. a
-   `foo` module needs a `FooProvider` class — this is a strict, exact
-   naming convention, not a suggestion).
+1. Create `src/agentsh/context/providers/<name>.py` with a class
+   decorated `@register("<name>")` (`from agentsh.context.providers import register`). The class name itself can be anything you like —
+   resolution never inspects it.
 1. Give it a `name: str` class attribute (used as the fragment's
    `provider` field) and implement
    `async def collect(self, shell: Shell) -> ContextFragment | None:`.
@@ -152,13 +153,21 @@ Concretely:
 ## Adding an agent backend
 
 Agent backends live in `src/agentsh/agent/` and use the same
-dynamic-resolution pattern as context providers:
-`Agent.from_provider(provider)` (`src/agentsh/agent/base.py`) imports
-`agentsh.agent.<provider>` and looks up a class named
-`<Provider>Agent` (title-cased), e.g. `agentsh.agent.anthropic` must
-define `AnthropicAgent`.
+decorator-registration pattern as context providers and shell plugins.
+`Agent` stays a concrete base class — subclasses inherit its
+`from_provider` classmethod constructor — but resolution is now
+explicit: `Agent.from_provider(provider)` (`src/agentsh/agent/base.py`)
+imports `agentsh.agent.<provider>` (triggering that module's
+`@register("<provider>")` decorator as a side effect) and looks the
+class up in the registry by name, rather than guessing a class name
+from `provider.title()`. Only the one requested backend module is
+imported — never every backend eagerly — since each depends on an
+optional, per-provider third-party SDK that may not be installed.
 
-1. Create `src/agentsh/agent/<provider>.py` with `class <Provider>Agent:`.
+1. Create `src/agentsh/agent/<provider>.py` with a class that inherits
+   `Agent` (`from agentsh.agent.base import Agent, register`) and is
+   decorated `@register("<provider>")`. The class name itself can be
+   anything you like — resolution never inspects it.
 1. Implement `__init__(self, config: AgentConfig) -> None` (build your
    client from `config.model`, `config.max_tokens`, etc.) and
    `async def respond(self, conversation: list[Message], context: list[ContextFragment], tools: list[SchemaDict]) -> Message`.
@@ -168,12 +177,13 @@ define `AnthropicAgent`.
    all translation to/from the provider's own wire format happens inside
    your module (see `agent/anthropic.py:_message_to_anthropic` for the
    pattern). Don't leak provider-specific types back to the caller.
-1. Build the system prompt from `SYSTEM_PREFIX` (`agentsh.agent`) plus
-   each context fragment rendered through
-   `render_context_fragment()` (`agentsh.context.sanitize`) — every
-   backend must apply the same sanitization/boundary-wrapping, since
-   that's what keeps provider-sourced strings (a git branch name, etc.)
-   from being interpreted as instructions. See
+1. Build the system prompt with `_build_system()`
+   (`agentsh.agent._system`), which combines `SYSTEM_PREFIX` with each
+   context fragment rendered through `render_context_fragment()`
+   (`agentsh.context.sanitize`) — every backend must use the same
+   shared function so sanitization/boundary-wrapping stays consistent,
+   since that's what keeps provider-sourced strings (a git branch name,
+   etc.) from being interpreted as instructions. See
    [docs/security.md](docs/security.md).
 1. If your backend needs a new third-party SDK, add it as a new
    optional-dependency extra in `pyproject.toml`'s

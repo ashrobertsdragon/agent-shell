@@ -7,7 +7,7 @@ from google import genai
 from google.genai import types
 
 from agentsh.agent._system import _build_system
-from agentsh.agent.base import Agent
+from agentsh.agent.base import Agent, register
 from agentsh.agent.caching import IdentityCache
 from agentsh.config import AgentConfig
 from agentsh.models import ContextFragment, Message, ToolCall
@@ -97,6 +97,7 @@ def _message_to_google(
     return types.Content(role=role, parts=out_parts)
 
 
+@register("google")
 class GoogleAgent(Agent):
     """LLM backend using the Google GenAI API."""
 
