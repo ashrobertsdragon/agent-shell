@@ -130,14 +130,22 @@ class GoProvider:
         go_directive: str | None = None
         dependencies: list[dict[str, str]] = []
         if go_mod_path.is_file():
-            module, go_directive, dependencies = _parse_go_mod(
-                go_mod_path.read_text()
-            )
+            try:
+                go_mod_text = go_mod_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                go_mod_text = None
+            if go_mod_text is not None:
+                module, go_directive, dependencies = _parse_go_mod(go_mod_text)
 
         go_work_path = Path(shell.cwd) / "go.work"
         workspace_modules: list[str] | None = None
         if go_work_path.is_file():
-            workspace_modules = _parse_go_work(go_work_path.read_text())
+            try:
+                go_work_text = go_work_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                go_work_text = None
+            if go_work_text is not None:
+                workspace_modules = _parse_go_work(go_work_text)
 
         if go_version is None and module is None:
             return None
