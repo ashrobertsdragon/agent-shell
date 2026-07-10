@@ -13,6 +13,7 @@ from agentsh.context.providers.filesystem import FilesystemProvider
 from agentsh.context.providers.git import GitProvider
 from agentsh.context.providers.history import HistoryProvider
 from agentsh.context.providers.kubernetes import KubernetesProvider
+from agentsh.context.providers.node import NodeProvider
 from agentsh.context.providers.python import PythonProvider
 from agentsh.models import CommandResult
 
@@ -428,3 +429,145 @@ async def test_environment_provider(shell: MagicMock) -> None:
     assert "PATH" in env
     assert "ANTHROPIC_API_KEY" not in env
     assert "MY_SECRET" not in env
+
+
+async def test_node_provider_returns_none_without_node(
+    shell: MagicMock,
+) -> None:
+    """NodeProvider returns None when node is unavailable."""
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="",
+            stderr="command not found",
+            exit_code=127,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    provider = NodeProvider()
+    result = await provider.collect(shell)
+    assert result is None
+
+
+async def test_node_provider_strips_v_prefix_from_version(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """NodeProvider strips the leading ``v`` from ``node --version``."""
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="v20.11.0\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+    )
+    shell.cwd = str(tmp_path)
+    provider = NodeProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("node_version") == "20.11.0"
+
+
+async def test_node_provider_returns_fragment_without_package_json(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """NodeProvider still returns a fragment when there is no package.json.
+
+    The Node version alone is useful context even without a JS project
+    in the current directory, so absence of the manifest degrades to
+    empty scripts/dependencies rather than None.
+    """
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="v20.11.0\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+    )
+    shell.cwd = str(tmp_path)
+    provider = NodeProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("scripts") == {}
+    assert result.payload.get("dependencies") == {}
+    assert result.payload.get("dev_dependencies") == {}
+
+
+async def test_node_provider_parses_package_json(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """NodeProvider parses scripts, dependencies, and devDependencies."""
+    (tmp_path / "package.json").write_text(
+        """
+        {
+            "name": "example",
+            "scripts": {"build": "tsc", "test": "vitest"},
+            "dependencies": {"react": "^18.2.0"},
+            "devDependencies": {"typescript": "^5.4.0"}
+        }
+        """
+    )
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="v20.11.0\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+    )
+    shell.cwd = str(tmp_path)
+    provider = NodeProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("scripts") == {"build": "tsc", "test": "vitest"}
+    assert result.payload.get("dependencies") == {"react": "^18.2.0"}
+    assert result.payload.get("dev_dependencies") == {"typescript": "^5.4.0"}
+
+
+async def test_node_provider_handles_malformed_package_json(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """NodeProvider does not crash on malformed package.json."""
+    (tmp_path / "package.json").write_text("{not valid json")
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="v20.11.0\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+    )
+    shell.cwd = str(tmp_path)
+    provider = NodeProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("node_version") == "20.11.0"
+    assert result.payload.get("scripts") == {}
+
+
+async def test_node_provider_commands_are_shell_portable(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """NodeProvider never embeds POSIX-only redirection in its commands."""
+    commands: list[str] = []
+
+    async def execute(command: str) -> CommandResult:
+        commands.append(command)
+        return CommandResult(
+            stdout="v20.11.0\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+
+    shell.execute = execute
+    shell.cwd = str(tmp_path)
+    await NodeProvider().collect(shell)
+    assert commands
+    assert all("/dev/null" not in c for c in commands)
