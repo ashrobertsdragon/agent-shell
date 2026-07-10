@@ -26,7 +26,11 @@ _MODULE_IMPORT_ORDERS = [
 ]
 
 
-@pytest.mark.parametrize("modules", _MODULE_IMPORT_ORDERS)
+@pytest.mark.parametrize(
+    "modules",
+    _MODULE_IMPORT_ORDERS,
+    ids=["->".join(order) for order in _MODULE_IMPORT_ORDERS],
+)
 def test_modules_import_cleanly_in_any_order(modules: list[str]) -> None:
     """Each module imports without NameError or ImportError, in isolation.
 
