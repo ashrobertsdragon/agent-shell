@@ -39,9 +39,12 @@ def resolve_provider(name: str) -> type[ContextProvider]:
     decorator, so lookup never depends on guessing a class name from
     ``name`` -- see agentsh.registry.Registry.
     """
+    module_name = f"agentsh.context.providers.{name.lower()}"
     try:
-        import_module(f"agentsh.context.providers.{name.lower()}")
-    except ModuleNotFoundError:
+        import_module(module_name)
+    except ModuleNotFoundError as e:
+        if e.name != module_name:
+            raise
         raise UnknownProviderError(
             f"Unknown context provider: {name!r}"
         ) from None

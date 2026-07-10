@@ -25,10 +25,24 @@ class Registry[T]:
         self._entries: dict[str, type[T]] = {}
 
     def register(self, name: str) -> Callable[[type[T]], type[T]]:
-        """Return a decorator that registers the decorated class under name."""
+        """Return a decorator that registers the decorated class under name.
+
+        Raises:
+            ValueError: If a different class is already registered under
+                this name (re-registering the same class, e.g. from a
+                module re-imported in tests, is a no-op).
+        """
 
         def _decorator(cls: type[T]) -> type[T]:
-            self._entries[name.lower()] = cls
+            key = name.lower()
+            existing = self._entries.get(key)
+            if existing is not None and existing is not cls:
+                raise ValueError(
+                    f"{key!r} is already registered to "
+                    f"{existing.__qualname__}; cannot also register "
+                    f"{cls.__qualname__}"
+                )
+            self._entries[key] = cls
             return cls
 
         return _decorator

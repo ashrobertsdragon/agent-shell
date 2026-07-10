@@ -6,6 +6,7 @@ import types
 import pytest
 
 from agentsh.config import ContextConfig
+from agentsh.context import providers as providers_module
 from agentsh.context.providers import (
     UnknownProviderError,
     build_providers,
@@ -75,8 +76,11 @@ def test_resolve_provider_does_not_guess_class_name_from_title_case(
     setattr(fake_module, "TotallyUnconventionalName", TotallyUnconventionalName)
     monkeypatch.setitem(sys.modules, module_name, fake_module)
 
-    factory = resolve_provider("node_env")
-    assert factory is TotallyUnconventionalName
+    try:
+        factory = resolve_provider("node_env")
+        assert factory is TotallyUnconventionalName
+    finally:
+        providers_module._registry._entries.pop("node_env", None)
 
 
 def test_resolve_provider_module_not_found_raises_unknown_provider_error() -> (
