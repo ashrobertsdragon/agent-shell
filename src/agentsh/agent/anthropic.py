@@ -12,21 +12,13 @@ from anthropic.types import (
     ToolUseBlockParam,
 )
 
-from agentsh.agent import SYSTEM_PREFIX, Agent
+from agentsh.agent import Agent, _build_system
 from agentsh.agent.caching import IdentityCache
 from agentsh.config import AgentConfig
-from agentsh.context.sanitize import render_context_fragment
 from agentsh.models import ContextFragment, Message, ToolCall
 from agentsh.tools import SchemaDict
 
 _EPHEMERAL_CACHE: CacheControlEphemeralParam = {"type": "ephemeral"}
-
-
-def _build_system(context: list[ContextFragment]) -> str:
-    """Combine the base system prompt with sanitized context fragments."""
-    parts = [SYSTEM_PREFIX]
-    parts.extend(render_context_fragment(frag) for frag in context)
-    return "\n".join(parts)
 
 
 def _message_to_anthropic(m: Message, *, cache: bool = False) -> MessageParam:
