@@ -83,6 +83,7 @@ class RustProvider:
             return None
 
         toolchain = rustc_version if have_rustc else cargo_version
+        toolchain_is_bare_name = False
 
         rustup_result = await shell.execute("rustup show active-toolchain")
         rustup_text = (
@@ -90,6 +91,7 @@ class RustProvider:
         )
         if rustup_result.exit_code == 0 and rustup_text:
             toolchain = rustup_text.splitlines()[0].strip()
+            toolchain_is_bare_name = True
 
         package_name: str | None = None
         package_version: str | None = None
@@ -121,7 +123,10 @@ class RustProvider:
                         for dep_name, spec in deps.items()
                     }
 
-        summary_parts = [f"rust {toolchain}"]
+        toolchain_summary = (
+            f"rust {toolchain}" if toolchain_is_bare_name else toolchain
+        )
+        summary_parts = [toolchain_summary]
         if package_name:
             package_label = package_name
             if package_version:
