@@ -1,11 +1,13 @@
 """History context provider — reports recent shell commands."""
 
+from agentsh.context.providers import register
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 
 _LIMIT = 20
 
 
+@register("history")
 class HistoryProvider:
     """Collects the most recent shell history entries."""
 

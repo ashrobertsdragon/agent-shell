@@ -2,10 +2,12 @@
 
 from pathlib import Path
 
+from agentsh.context.providers import register
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 
 
+@register("python")
 class PythonProvider:
     """Collects Python version and virtualenv status."""
 

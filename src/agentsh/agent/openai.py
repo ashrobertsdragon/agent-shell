@@ -15,7 +15,7 @@ from openai.types.chat import (
 )
 
 from agentsh.agent._system import _build_system
-from agentsh.agent.base import Agent
+from agentsh.agent.base import Agent, register
 from agentsh.agent.caching import IdentityCache
 from agentsh.config import AgentConfig
 from agentsh.models import ContextFragment, Message, ToolCall
@@ -76,6 +76,7 @@ def _message_to_openai(m: Message) -> list[ChatCompletionMessageParam]:
     return []
 
 
+@register("openai")
 class OpenaiAgent(Agent):
     """LLM backend using the OpenAI API."""
 

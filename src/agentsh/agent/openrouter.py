@@ -15,7 +15,7 @@ from openrouter.components import (
 )
 
 from agentsh.agent._system import _build_system
-from agentsh.agent.base import Agent
+from agentsh.agent.base import Agent, register
 from agentsh.agent.caching import IdentityCache
 from agentsh.config import AgentConfig
 from agentsh.models import ContextFragment, Message, ToolCall
@@ -107,6 +107,7 @@ def _mark_cache_breakpoint(
     return marked  # type: ignore[return-value]
 
 
+@register("openrouter")
 class OpenrouterAgent(Agent):
     """LLM backend using the OpenRouter API."""
 

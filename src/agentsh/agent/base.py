@@ -1,9 +1,10 @@
 """Agent protocol definition."""
 
-import importlib
-from typing import TYPE_CHECKING, cast
+from importlib import import_module
+from typing import TYPE_CHECKING
 
 from agentsh.models import ContextFragment, Message
+from agentsh.registry import Registry
 
 if TYPE_CHECKING:
     from agentsh.config import AgentConfig
@@ -15,10 +16,18 @@ class Agent:
 
     @classmethod
     def from_provider(cls, provider: str) -> type["Agent"]:
-        """Resolve an Agent subclass from a provider name."""
-        module = importlib.import_module(f"agentsh.agent.{provider.lower()}")
-        agent_cls = getattr(module, f"{provider.title()}Agent")
-        return cast("type[Agent]", agent_cls)
+        """Resolve the Agent subclass registered for provider.
+
+        Importing ``agentsh.agent.<provider>`` triggers that module's
+        ``@register(name)`` decorator (see agentsh.registry.Registry) as
+        a side effect, so resolution never depends on guessing a class
+        name from `provider`. Only the requested backend module is
+        imported -- not every backend eagerly -- since each backend
+        depends on an optional, per-provider third-party SDK (anthropic,
+        openai, google-genai, openrouter) that may not be installed.
+        """
+        import_module(f"agentsh.agent.{provider.lower()}")
+        return _registry.get(provider)
 
     def __init__(self, config: AgentConfig) -> None:
         """Initialise the async Anthropic client."""
@@ -32,3 +41,8 @@ class Agent:
     ) -> Message:
         """Return the next assistant message."""
         raise NotImplementedError
+
+
+_registry: Registry[Agent] = Registry()
+
+register = _registry.register

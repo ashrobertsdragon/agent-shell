@@ -1,9 +1,11 @@
 """Git context provider — reports current branch and working-tree status."""
 
+from agentsh.context.providers import register
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 
 
+@register("git")
 class GitProvider:
     """Collects current git branch and dirty-file summary."""
 

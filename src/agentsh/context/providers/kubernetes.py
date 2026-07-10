@@ -1,9 +1,11 @@
 """Kubernetes context provider — reports current context and namespace."""
 
+from agentsh.context.providers import register
 from agentsh.models import ContextFragment
 from agentsh.shell.protocol import Shell
 
 
+@register("kubernetes")
 class KubernetesProvider:
     """Collects the active kubectl context and namespace."""
 
