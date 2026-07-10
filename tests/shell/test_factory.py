@@ -33,6 +33,15 @@ def test_create_shell_auto_detects_fish(
     assert type(shell).__name__ == "FishShell"
 
 
+def test_create_shell_auto_detects_nu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto-detection of $SHELL=/usr/bin/nu resolves to NuShellShell."""
+    monkeypatch.setenv("SHELL", "/usr/bin/nu")
+    shell = create_shell("auto")
+    assert type(shell).__name__ == "NuShellShell"
+
+
 def test_create_shell_auto_undetectable_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
