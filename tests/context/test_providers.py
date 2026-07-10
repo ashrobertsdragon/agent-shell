@@ -262,6 +262,56 @@ async def test_python_env_provider_falls_back_to_python_when_python3_missing(
     assert commands == ["python3 --version", "python --version"]
 
 
+async def test_python_env_provider_reads_version_from_stderr(
+    shell: MagicMock,
+) -> None:
+    """PythonProvider accepts a version string printed to stderr.
+
+    Some Python builds print ``--version`` output to stderr even on a
+    zero exit code.
+    """
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="",
+            stderr="Python 2.7.18\n",
+            exit_code=0,
+            duration_ms=1,
+            cwd="/repo",
+        )
+    )
+    shell.cwd = "/repo"
+    provider = PythonProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("python_version") == "2.7.18"
+
+
+async def test_python_env_provider_detects_windows_venv_layout(
+    shell: MagicMock, tmp_path: Path
+) -> None:
+    """PythonProvider recognizes a venv laid out Windows-style.
+
+    Windows virtualenvs place the interpreter under
+    ``Scripts\\python.exe`` rather than the POSIX ``bin/python``.
+    """
+    (tmp_path / ".venv" / "Scripts").mkdir(parents=True)
+    (tmp_path / ".venv" / "Scripts" / "python.exe").touch()
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="Python 3.12.0\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            cwd=str(tmp_path),
+        )
+    )
+    shell.cwd = str(tmp_path)
+    provider = PythonProvider()
+    result = await provider.collect(shell)
+    assert result is not None
+    assert result.payload.get("has_venv") is True
+
+
 async def test_python_env_provider_returns_none_when_neither_present(
     shell: MagicMock,
 ) -> None:

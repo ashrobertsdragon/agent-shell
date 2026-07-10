@@ -23,14 +23,22 @@ class PythonProvider:
         latter.
         """
         version_result = await shell.execute("python3 --version")
-        if version_result.exit_code != 0 or not version_result.stdout.strip():
+        version_text = (
+            version_result.stdout.strip() or version_result.stderr.strip()
+        )
+        if version_result.exit_code != 0 or not version_text:
             version_result = await shell.execute("python --version")
-        if version_result.exit_code != 0 or not version_result.stdout.strip():
+            version_text = (
+                version_result.stdout.strip() or version_result.stderr.strip()
+            )
+        if version_result.exit_code != 0 or not version_text:
             return None
 
-        python_version = version_result.stdout.strip().removeprefix("Python ")
-        cwd = shell.cwd
-        has_venv = (Path(cwd) / ".venv" / "bin" / "python").is_file()
+        python_version = version_text.removeprefix("Python ")
+        venv_dir = Path(shell.cwd) / ".venv"
+        has_venv = (venv_dir / "bin" / "python").is_file() or (
+            venv_dir / "Scripts" / "python.exe"
+        ).is_file()
 
         return ContextFragment(
             provider=self.name,
