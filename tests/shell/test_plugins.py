@@ -10,7 +10,7 @@ from agentsh.shell.plugin import register_plugins
 def test_register_plugins_registers_builtin_shells() -> None:
     """All built-in shell backends are discoverable after registration."""
     register_plugins()
-    assert {"bash", "cmd", "fish", "powershell", "zsh"} <= set(
+    assert {"bash", "cmd", "fish", "nu", "powershell", "zsh"} <= set(
         _registry.available()
     )
 
