@@ -1,13 +1,16 @@
 # agentsh
 
 `agentsh` is a shell wrapper that routes each line you type to either a
-real shell subprocess (bash, zsh, PowerShell, or cmd.exe) or an LLM agent
-with tool access to that shell.
+real shell subprocess (bash, zsh, fish, Nushell, PowerShell, or cmd.exe)
+or an LLM agent with tool access to that shell.
 
 Type something that parses as valid shell syntax and it runs exactly as
-if you'd typed it into the shell directly — `cd`, environment variables,
-and shell state all behave the same, because `agentsh` drives one
-persistent subprocess rather than spawning a new one per command. Type
+if you'd typed it into the shell directly — `cd` and working-directory
+state behave the same across every backend. Most backends (bash, zsh,
+PowerShell, cmd.exe) drive one persistent subprocess per session; fish
+and Nushell instead run a fresh process per command (working directory
+is still carried over, but environment variable mutations don't
+persist between commands — see [Shell backends](#shell-backends)). Type
 anything else (or prefix a line with `/agent`) and it's routed to an LLM
 agent instead, which sees live environmental context (git branch, cwd,
 running containers, ...) and can call tools — `RunCommand`, `ReadFile`,
@@ -19,7 +22,7 @@ engine that can allow, ask for confirmation, or deny it before it runs.
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- One of: bash, zsh, PowerShell, or cmd.exe on `PATH`
+- One of: bash, zsh, fish, Nushell, PowerShell, or cmd.exe on `PATH`
 - An API key for at least one supported LLM provider (see below)
 
 ## Install
@@ -65,12 +68,14 @@ a one-line error rather than a traceback.
 
 ## Shell backends
 
-Four shells are currently supported, registered under these names:
+Six shells are currently supported, registered under these names:
 
 | Backend    | Registered name | Detected via                    |
 | ---------- | --------------- | ------------------------------- |
 | Bash       | `bash`          | `$SHELL` (basename of the path) |
 | Zsh        | `zsh`           | `$SHELL` (basename of the path) |
+| Fish       | `fish`          | `$SHELL` (basename of the path) |
+| Nushell    | `nu`            | `$SHELL` (basename of the path) |
 | PowerShell | `powershell`    | `$PSModulePath` present         |
 | cmd.exe    | `cmd`           | `$CMDCMDLINE` present           |
 
