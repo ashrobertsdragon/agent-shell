@@ -60,6 +60,33 @@ def _default_history_path() -> Path:
     return Path.home() / ".config" / "agentsh" / "nushell_history"
 
 
+def _complete_from_path(prefix: str, path: str) -> list[str]:
+    """Return executable names on PATH whose name starts with prefix.
+
+    Empty PATH components are skipped outright rather than treated as
+    the current directory: an unset or empty PATH should yield no
+    completions, not silently scan cwd as if it were on PATH.
+    """
+    matches: set[str] = set()
+    for directory in path.split(os.pathsep):
+        if not directory:
+            continue
+        try:
+            entries = os.scandir(directory)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                if not entry.name.startswith(prefix):
+                    continue
+                try:
+                    if entry.is_file() and os.access(entry.path, os.X_OK):
+                        matches.add(entry.name)
+                except OSError:
+                    continue
+    return sorted(matches)[:20]
+
+
 def _parse_sentinel(line: str, marker: str) -> tuple[int, str] | None:
     """Return (exit_code, cwd) if line is an exact sentinel match for marker.
 
@@ -262,20 +289,37 @@ class NuShellShell:
                 await asyncio.to_thread(discard_stderr_tempfile, stderr_path)
 
     async def env(self) -> dict[str, str]:
-        """Return the tracked environment by running `$env | to json -r`.
+        """Return the tracked environment, keeping only string-valued keys.
 
-        Only string-valued entries are kept: nushell's $env can hold
-        non-string values (e.g. closures like PROMPT_COMMAND) that
-        cannot round-trip as process environment variables anyway.
+        Non-string entries (e.g. closures like $env.PROMPT_COMMAND) are
+        filtered out *inside* the nu script, before ``to json`` ever
+        sees them: nu's ``to json``/``to nuon`` raise on closure-typed
+        values rather than merely omitting them, so piping the whole,
+        unfiltered ``$env`` to ``to json`` in one shot would make this
+        method return {} entirely whenever a single closure-valued
+        variable is present -- silently losing every real variable
+        rather than just the unconvertible one.
         """
-        result = await self.execute("$env | to json -r")
+        result = await self.execute(
+            "$env | transpose key value "
+            '| where {|row| ($row.value | describe) == "string"} '
+            "| to json -r"
+        )
         try:
             raw = json.loads(result.stdout)
         except (json.JSONDecodeError, TypeError):
             return {}
-        if not isinstance(raw, dict):
+        if not isinstance(raw, list):
             return {}
-        return {k: v for k, v in raw.items() if isinstance(v, str)}
+        env: dict[str, str] = {}
+        for item in raw:
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("key"), str)
+                and isinstance(item.get("value"), str)
+            ):
+                env[item["key"]] = item["value"]
+        return env
 
     async def history(self, limit: int = 100) -> list[str]:
         """Return the last `limit` lines of agentsh's own nu history file."""
@@ -294,21 +338,17 @@ class NuShellShell:
         could not be verified without a local nu install. PATH-based
         completion needs neither and mirrors what bash's `compgen -c`
         effectively returns for external commands.
+
+        The whole scan (including the per-entry ``os.access``/
+        ``is_file`` checks, not just the initial listing) runs inside
+        one ``asyncio.to_thread`` call, matching ``zsh.py``'s
+        ``_complete_from_path`` -- offloading only the directory
+        listing would still leave the per-entry stat-like syscalls on
+        the event loop for large PATH directories.
         """
-        prefix = partial
-        matches: set[str] = set()
-        for directory in os.environ.get("PATH", "").split(os.pathsep):
-            try:
-                entries = await asyncio.to_thread(os.listdir, directory)
-            except OSError:
-                continue
-            for name in entries:
-                if not name.startswith(prefix):
-                    continue
-                full = os.path.join(directory, name)
-                if os.access(full, os.X_OK) and not os.path.isdir(full):
-                    matches.add(name)
-        return sorted(matches)[:20]
+        return await asyncio.to_thread(
+            _complete_from_path, partial, os.environ.get("PATH", "")
+        )
 
     async def can_parse(self, raw: str) -> bool:
         """Return True if `nu-check` accepts raw as valid Nushell syntax.
@@ -319,6 +359,19 @@ class NuShellShell:
         confirm the file form unambiguously, and getting stdin-to-$in
         binding wrong in a -c script could not be verified without a
         local nu install.
+
+        The temp path is passed to the subprocess via an environment
+        variable and read back with `$env.AGENTSH_NU_CHECK_PATH`,
+        rather than interpolated into the script string: tempfile
+        paths shouldn't contain a single quote in practice, but a
+        custom TMPDIR could, and embedding it directly would corrupt
+        the script rather than fail safely.
+
+        OSError (e.g. FileNotFoundError if the cached nu executable
+        path stops existing between calls -- an uninstall or PATH
+        change after `_resolve_exe` already cached it) is treated the
+        same as an unparsable script rather than left to crash the
+        caller.
         """
 
         def _check() -> bool:
@@ -334,18 +387,21 @@ class NuShellShell:
                     tmp_path = f.name
                 try:
                     script = (
-                        f"if (nu-check '{tmp_path}') "
+                        "if (nu-check $env.AGENTSH_NU_CHECK_PATH) "
                         "{ exit 0 } else { exit 1 }"
                     )
+                    check_env = dict(os.environ)
+                    check_env["AGENTSH_NU_CHECK_PATH"] = tmp_path
                     result = subprocess.run(
                         [exe, "--no-config-file", "-c", script],
                         capture_output=True,
                         timeout=_CHECK_TIMEOUT,
+                        env=check_env,
                     )
                 finally:
                     Path(tmp_path).unlink(missing_ok=True)
                 return result.returncode == 0
-            except subprocess.TimeoutExpired:
+            except (subprocess.TimeoutExpired, OSError):
                 return False
 
         return await asyncio.to_thread(_check)

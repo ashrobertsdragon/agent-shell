@@ -204,15 +204,19 @@ async def test_execute_caught_error_reports_exit_code_one(
 async def test_env_parses_json_and_keeps_only_strings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """env() parses `$env | to json -r` output, dropping non-string values."""
+    """env() parses the filtered key/value table, dropping non-string values."""
     from agentsh.models import CommandResult
 
     shell = _make_shell(monkeypatch)
 
     async def fake_execute(command: str) -> CommandResult:
-        assert command == "$env | to json -r"
+        assert command == (
+            "$env | transpose key value "
+            '| where {|row| ($row.value | describe) == "string"} '
+            "| to json -r"
+        )
         return CommandResult(
-            stdout='{"FOO":"bar","COUNT":1,"OK":true}',
+            stdout='[{"key":"FOO","value":"bar"}]',
             stderr="",
             exit_code=0,
             duration_ms=1.0,
@@ -267,6 +271,17 @@ async def test_complete_skips_missing_path_dirs(
     assert await shell.complete("x") == []
 
 
+async def test_complete_empty_path_does_not_scan_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An empty PATH yields no completions rather than scanning cwd."""
+    (tmp_path / "sneaky").touch(mode=0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "")
+    shell = _make_shell(monkeypatch)
+    assert await shell.complete("sneaky") == []
+
+
 async def test_can_parse_valid_script(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -312,6 +327,21 @@ async def test_can_parse_timeout_returns_false(
         *args: object, **kwargs: object
     ) -> subprocess.CompletedProcess[bytes]:
         raise subprocess.TimeoutExpired(cmd="nu", timeout=2.0)
+
+    monkeypatch.setattr(nushell_module.subprocess, "run", _raise)
+    assert await shell.can_parse("print hi") is False
+
+
+async def test_can_parse_oserror_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raised OSError (e.g. the cached nu path vanishing) is not fatal."""
+    shell = _make_shell(monkeypatch)
+
+    def _raise(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        raise FileNotFoundError("nu")
 
     monkeypatch.setattr(nushell_module.subprocess, "run", _raise)
     assert await shell.can_parse("print hi") is False
