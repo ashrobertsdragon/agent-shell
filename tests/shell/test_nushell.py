@@ -204,15 +204,19 @@ async def test_execute_caught_error_reports_exit_code_one(
 async def test_env_parses_json_and_keeps_only_strings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """env() parses `$env | to json -r` output, dropping non-string values."""
+    """env() parses the filtered key/value table, dropping non-string values."""
     from agentsh.models import CommandResult
 
     shell = _make_shell(monkeypatch)
 
     async def fake_execute(command: str) -> CommandResult:
-        assert command == "$env | to json -r"
+        assert command == (
+            "$env | transpose key value "
+            '| where {|row| ($row.value | describe) == "string"} '
+            "| to json -r"
+        )
         return CommandResult(
-            stdout='{"FOO":"bar","COUNT":1,"OK":true}',
+            stdout='[{"key":"FOO","value":"bar"}]',
             stderr="",
             exit_code=0,
             duration_ms=1.0,
