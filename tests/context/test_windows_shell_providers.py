@@ -204,6 +204,10 @@ class TestProvidersOnCmdShell:
             pytest.skip("git not installed")
         await shell.execute(f'cd /d "{tmp_path}"')
         await shell.execute("git init -b main")
+        await shell.execute(
+            "git -c user.name=test -c user.email=test@example.com "
+            "commit --allow-empty -m init"
+        )
         result = await GitProvider().collect(shell)
         assert result is not None
         assert result.payload["branch"] == "main"
@@ -262,6 +266,10 @@ class TestProvidersOnPowerShellShell:
             pytest.skip("git not installed")
         await shell.execute(f"Set-Location '{tmp_path}'")
         await shell.execute("git init -b main")
+        await shell.execute(
+            "git -c user.name=test -c user.email=test@example.com "
+            "commit --allow-empty -m init"
+        )
         result = await GitProvider().collect(shell)
         assert result is not None
         assert result.payload["branch"] == "main"

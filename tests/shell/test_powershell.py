@@ -22,8 +22,38 @@ from agentsh.shell.plugin.powershell import (
     _ps_quote,
     _psreadline_history_path,
     _resolve_powershell,
+    _strip_leading_ansi,
     _wrap_command,
 )
+
+
+def test_strip_leading_ansi_removes_decckm_noise() -> None:
+    """A leading DECCKM set/reset pair (pwsh's own noise) is stripped."""
+    assert _strip_leading_ansi("\x1b[?1h\x1b[?1lhello\n") == "hello\n"
+
+
+def test_strip_leading_ansi_removes_repeated_pairs() -> None:
+    """Multiple consecutive noise pairs (observed on real pwsh) are all stripped."""
+    noisy = "\x1b[?1h\x1b[?1l\x1b[?1h\x1b[?1lhello\n"
+    assert _strip_leading_ansi(noisy) == "hello\n"
+
+
+def test_strip_leading_ansi_preserves_real_leading_color_code() -> None:
+    """A real leading SGR/color code after the noise is left untouched.
+
+    Regression guard: an earlier, broader regex matched any leading CSI
+    sequence and would also eat a legitimate color code immediately
+    following the noise (e.g. `git -c color.ui=always log --oneline`
+    output), corrupting real command output rather than only stripping
+    pwsh's own DECCKM noise.
+    """
+    noisy = "\x1b[?1h\x1b[?1l\x1b[33m53cb909\x1b[m init\n"
+    assert _strip_leading_ansi(noisy) == "\x1b[33m53cb909\x1b[m init\n"
+
+
+def test_strip_leading_ansi_passthrough_without_noise() -> None:
+    """A line with no leading noise is returned unchanged."""
+    assert _strip_leading_ansi("hello\n") == "hello\n"
 
 
 class _FakeClock:
@@ -202,7 +232,7 @@ def test_wrap_command_embeds_supplied_marker() -> None:
     """The per-call marker (sentinel plus nonce), not the bare sentinel, is emitted."""
     marker = f"{_SENTINEL}:some-nonce"
     wrapped = _wrap_command("echo hi", "/tmp/stderr.txt", marker)
-    assert f'"{marker}:$__ec' in wrapped
+    assert f'"{marker}:${{__ec}}' in wrapped
 
 
 def _patch_default_history_path(
@@ -494,6 +524,25 @@ class TestPowerShellIntegration:
     async def test_execute_echo(self, shell: PowerShellShell) -> None:
         """Execute captures stdout."""
         result = await shell.execute('Write-Output "hello"')
+        assert result.stdout.strip() == "hello"
+        assert result.exit_code == 0
+
+    async def test_execute_does_not_hang_on_command_stdin_mode(
+        self, shell: PowerShellShell
+    ) -> None:
+        """A real pwsh command completes promptly and yields a clean sentinel.
+
+        Regression test for #57: the ``$__ec:`` interpolation ParserError
+        and the ``-Command -`` mode's VT100 escape-code prefix on every
+        output line previously meant execute() never found a matching
+        sentinel line and hung forever. asyncio.wait_for with a short
+        timeout turns a regression of either bug into a fast, clean test
+        failure instead of a suite that never completes; the stdout
+        assertion also guards against the ANSI codes leaking into output.
+        """
+        result = await asyncio.wait_for(
+            shell.execute('Write-Output "hello"'), timeout=10
+        )
         assert result.stdout.strip() == "hello"
         assert result.exit_code == 0
 

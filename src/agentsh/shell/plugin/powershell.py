@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -21,6 +22,33 @@ from agentsh.shell.plugin._stderr_file import (
 from agentsh.shell.plugin._stream import read_until_sentinel
 
 _SENTINEL = "__AGENTSH_PS_DONE_8675309__"
+
+_LEADING_ANSI = re.compile(r"^(?:\x1b\[\?1[hl])+")
+
+
+def _strip_leading_ansi(text: str) -> str:
+    r"""Strip pwsh's ``-Command -`` mode VT100 noise from a line's start.
+
+    pwsh, when fed commands over piped stdin in ``-Command -`` mode,
+    unconditionally prefixes every output line with VT100 escape codes
+    (observed: repeated ``\x1b[?1h\x1b[?1l`` DECCKM set/reset pairs),
+    even though stdout is a non-tty pipe and -NonInteractive is set.
+    This does not happen with a direct ``-Command "..."`` invocation
+    (no stdin piping) -- confirmed via hex-dump comparison -- so it's
+    specific to this backend's read-from-stdin invocation mode, not a
+    general PowerShell behaviour worth handling in the shared stream
+    reader for every backend.
+
+    The pattern is deliberately narrow (only the specific DECCKM
+    set/reset pair observed, not any leading CSI sequence): a generic
+    ``\x1b\[[0-9;?]*[a-zA-Z]`` matcher would also eat a real, legitimate
+    SGR/color code that happens to open a line -- e.g. `git -c
+    color.ui=always log --oneline` or `$PSStyle.OutputRendering =
+    'Ansi'` output -- silently corrupting real command output instead
+    of only stripping pwsh's own noise.
+    """
+    return _LEADING_ANSI.sub("", text)
+
 
 _PROMPT_TIMEOUT = 3.0
 
@@ -116,6 +144,14 @@ def _wrap_command(
     single quotes cannot break the wrapper syntax. marker is the
     per-call sentinel (base sentinel plus a random nonce) so command
     output cannot forge completion.
+
+    The sentinel line uses ``${__ec}:``, not ``$__ec:``: inside a
+    double-quoted interpolated string, a bare variable reference
+    immediately followed by a colon is parsed as an attempt at
+    ``$scope:name`` syntax (as in ``$env:PATH``), which throws a real
+    ParserError on every actual PowerShell -- confirmed against a real
+    pwsh via both `-Command -` piping and `-File` batch execution.
+    ``${}`` delimits the variable name unambiguously.
     """
     b64 = base64.b64encode(command.encode()).decode("ascii")
     stderr_literal = _ps_quote(stderr_path)
@@ -128,7 +164,7 @@ def _wrap_command(
         f"Add-Content {stderr_literal}; $__ok = $false }}\n"
         "$__ec = if ($__ok -and -not $LASTEXITCODE) { 0 } "
         "elseif ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }\n"
-        f'"{marker}:$__ec:$((Get-Location).Path)"\n'
+        f'"{marker}:${{__ec}}:$((Get-Location).Path)"\n'
     )
 
 
@@ -199,7 +235,9 @@ class PowerShellShell(ProcessBackedShell):
                 if not proc.stdout:
                     raise ChildProcessError
                 stdout_content, sentinel_line = await read_until_sentinel(
-                    proc.stdout, f"{marker}:"
+                    proc.stdout,
+                    f"{marker}:",
+                    strip_noise=_strip_leading_ansi,
                 )
                 parsed = (
                     _parse_sentinel(sentinel_line, marker)
