@@ -83,13 +83,18 @@ async def read_until_sentinel(
             return finish(), ""
         if marker is not None:
             # Already discarding output: skip the decode unless this line
-            # might be the sentinel we're still watching for.
+            # might be the sentinel we're still watching for. The raw
+            # check runs even when strip_noise is set: sentinel_prefix
+            # never starts with the noise pattern, so a raw match still
+            # means a real sentinel, and it avoids a decode+strip on
+            # every discarded line for a caller whose noise doesn't
+            # appear on every line.
+            if line.startswith(sentinel_bytes):
+                return finish(), line.decode(errors="replace")
             if strip_noise is not None:
                 candidate = strip_noise(line.decode(errors="replace"))
                 if candidate.startswith(sentinel_prefix):
                     return finish(), candidate
-            elif line.startswith(sentinel_bytes):
-                return finish(), line.decode(errors="replace")
             continue
         decoded = line.decode(errors="replace")
         if strip_noise is not None:
