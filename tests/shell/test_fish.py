@@ -7,9 +7,9 @@ import stat
 import subprocess
 import sys
 import threading
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,68 +19,41 @@ from agentsh.shell.plugin.fish import (
     FishShell,
     _fish_quote,
     _parse_sentinel,
+    _wrap_command,
 )
 
 
-class _FakeClock:
-    """Stand-in for the time module yielding preset monotonic ticks."""
-
-    def __init__(self, *ticks: float) -> None:
-        self._ticks = iter(ticks)
-
-    def monotonic(self) -> float:
-        """Return the next preset tick."""
-        return next(self._ticks)
-
-
-class _FakeStdin:
-    """Synthesizes a fish-shaped stdout reply for each write.
-
-    execute() writes the begin/end-wrapped command plus the
-    sentinel-print statement in a single call, then reads stdout until
-    the sentinel line appears. This fake extracts the per-call marker
-    from that write and feeds a canned reply straight into the paired
-    StreamReader, so execute()'s wrapping and sentinel-parsing logic
-    can be exercised without a real fish subprocess.
-    """
-
-    def __init__(
-        self,
-        stdout: asyncio.StreamReader,
-        respond: Callable[[str, str], str],
-    ) -> None:
-        self._stdout = stdout
-        self._respond = respond
-
-    def write(self, data: bytes) -> None:
-        """Extract the marker from the write and feed the canned reply."""
-        text = data.decode()
-        match = re.search(rf"{re.escape(_SENTINEL)}_[0-9a-f]+", text)
-        assert match is not None, "wrapped command must embed a marker"
-        self._stdout.feed_data(self._respond(text, match.group(0)).encode())
-
-    async def drain(self) -> None:
-        """No-op: write() already delivered the reply synchronously."""
-
-
 class _FakeProcess:
-    """Stand-in asyncio.subprocess.Process driven by a canned responder."""
+    """Stand-in asyncio.subprocess.Process with preset stdout content."""
 
-    def __init__(self, respond: Callable[[str, str], str]) -> None:
+    def __init__(self, stdout_data: bytes, returncode: int | None = 0) -> None:
         self.stdout = asyncio.StreamReader()
-        self.stdin = _FakeStdin(self.stdout, respond)
-        self.returncode: int | None = None
+        self.stdout.feed_data(stdout_data)
+        self.stdout.feed_eof()
+        self.returncode = returncode
 
     def kill(self) -> None:
         """Mark the process as terminated by kill."""
         self.returncode = -9
 
-    def terminate(self) -> None:
-        """Mark the process as terminated, mirroring Process.terminate()."""
-        self.returncode = -15
-
     async def wait(self) -> None:
         """No-op: nothing left to reap."""
+
+
+def _make_shell(monkeypatch: pytest.MonkeyPatch) -> FishShell:
+    """Build a FishShell with executable resolution stubbed out."""
+    monkeypatch.setattr(
+        fish_module.shutil, "which", lambda name: "/usr/bin/fish"
+    )
+    return FishShell()
+
+
+def test_wrap_command_embeds_command_and_marker() -> None:
+    """The wrapped script contains the raw command and a sentinel printf."""
+    wrapped = _wrap_command("echo hello", "MARKER_1")
+    assert "echo hello" in wrapped
+    assert 'printf "%s:%d:%s\\n" "MARKER_1" "$__ec" "$(pwd)"' in wrapped
+    assert "set __ec $status" in wrapped
 
 
 def test_parse_sentinel_matches_exact_marker() -> None:
@@ -120,6 +93,26 @@ def test_fish_quote_escapes_single_quotes_and_backslashes() -> None:
     assert _fish_quote("it's") == r"'it\'s'"
     assert _fish_quote("a\\b") == r"'a\\b'"
     assert _fish_quote("plain") == "'plain'"
+
+
+def test_resolve_exe_raises_when_fish_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_resolve_exe raises RuntimeError when fish is not on PATH."""
+    monkeypatch.setattr(fish_module.shutil, "which", lambda name: None)
+    shell = FishShell()
+    with pytest.raises(RuntimeError, match="fish"):
+        shell._resolve_exe()
+
+
+def test_resolve_exe_caches_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_resolve_exe only calls shutil.which once, caching the result."""
+    which_mock = MagicMock(return_value="/usr/bin/fish")
+    monkeypatch.setattr(fish_module.shutil, "which", which_mock)
+    shell = FishShell()
+    assert shell._resolve_exe() == "/usr/bin/fish"
+    assert shell._resolve_exe() == "/usr/bin/fish"
+    assert which_mock.call_count == 1
 
 
 def _patch_default_history_path(
@@ -163,23 +156,22 @@ async def test_append_history_writes_own_secure_file(
         assert stat.S_IMODE(own_file.stat().st_mode) == 0o600
 
 
-async def test_execute_full_round_trip_with_stderr() -> None:
-    """execute wraps the command, parses the sentinel, and reads stderr.
+async def test_execute_full_round_trip_with_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """execute wraps the command, parses the sentinel, and reads stderr."""
+    shell = _make_shell(monkeypatch)
 
-    Drives the real execute() implementation against a mocked fish
-    subprocess so the begin/end wrapping, $status capture, and
-    sentinel/stderr handling is validated without a real fish binary.
-    """
+    def respond(script: str, marker: str) -> bytes:
+        return f"hello\n{marker}:0:/home/x\n".encode()
 
-    def respond(wrapped: str, marker: str) -> str:
-        stderr_match = re.search(r"end 2>(\S+)", wrapped)
-        assert stderr_match is not None
-        Path(stderr_match.group(1)).write_text("oops\n")
-        assert "$status" in wrapped
-        return f"hello\n{marker}:0:/home/x\n"
+    async def fake_spawn(exe: str, script: str, stderr_path: str) -> object:
+        Path(stderr_path).write_text("oops\n")
+        match = re.search(rf"{re.escape(_SENTINEL)}_[0-9a-f]+", script)
+        assert match is not None
+        return _FakeProcess(respond(script, match.group(0)))
 
-    shell = FishShell()
-    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    monkeypatch.setattr(shell, "_spawn", fake_spawn)
     result = await shell.execute("echo hello")
     assert result.stdout == "hello\n"
     assert result.stderr == "oops\n"
@@ -188,70 +180,108 @@ async def test_execute_full_round_trip_with_stderr() -> None:
     assert shell.cwd == "/home/x"
 
 
-async def test_execute_nonzero_exit_code_round_trips() -> None:
+async def test_execute_nonzero_exit_code_round_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A nonzero $status from the mocked subprocess is preserved."""
+    shell = _make_shell(monkeypatch)
 
-    def respond(wrapped: str, marker: str) -> str:
-        return f"{marker}:1:/home/x\n"
+    async def fake_spawn(exe: str, script: str, stderr_path: str) -> object:
+        match = re.search(rf"{re.escape(_SENTINEL)}_[0-9a-f]+", script)
+        assert match is not None
+        return _FakeProcess(f"{match.group(0)}:1:/home/x\n".encode())
 
-    shell = FishShell()
-    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    monkeypatch.setattr(shell, "_spawn", fake_spawn)
     result = await shell.execute("false")
     assert result.exit_code == 1
 
 
-async def test_execute_wraps_in_begin_end_block() -> None:
-    """The command body is wrapped in a begin/end block, not braces."""
+async def test_execute_embeds_command_in_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The command text is embedded verbatim in the spawned script."""
+    shell = _make_shell(monkeypatch)
+    seen_script = ""
 
-    def respond(wrapped: str, marker: str) -> str:
-        assert wrapped.startswith("begin\n")
-        assert "echo hi" in wrapped
-        return f"hi\n{marker}:0:/home/x\n"
+    async def fake_spawn(exe: str, script: str, stderr_path: str) -> object:
+        nonlocal seen_script
+        seen_script = script
+        match = re.search(rf"{re.escape(_SENTINEL)}_[0-9a-f]+", script)
+        assert match is not None
+        return _FakeProcess(f"hi\n{match.group(0)}:0:/home/x\n".encode())
 
-    shell = FishShell()
-    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    monkeypatch.setattr(shell, "_spawn", fake_spawn)
     result = await shell.execute("echo hi")
+    assert "echo hi" in seen_script
     assert result.stdout == "hi\n"
 
 
-async def test_execute_duration_unit_consistent_on_child_process_error(
+async def test_execute_missing_sentinel_falls_back_to_returncode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The ChildProcessError branch reports duration in milliseconds."""
-    shell = FishShell()
-    shell._process = SimpleNamespace(  # type: ignore[assignment]
-        stdin=None, returncode=None
-    )
-    monkeypatch.setattr(fish_module, "time", _FakeClock(0.0, 0.5))
-    result = await shell.execute("true")
-    assert result.duration_ms == 500.0
+    """If the sentinel never appears, proc.returncode is used and cwd sticks.
+
+    Simulates a command that calls `exit N` directly, bypassing the
+    wrapper's sentinel printf.
+    """
+    shell = _make_shell(monkeypatch)
+    original_cwd = shell.cwd
+
+    async def fake_spawn(exe: str, script: str, stderr_path: str) -> object:
+        return _FakeProcess(b"partial output\n", returncode=7)
+
+    monkeypatch.setattr(shell, "_spawn", fake_spawn)
+    result = await shell.execute("exit 7")
+    assert result.exit_code == 7
+    assert result.cwd == original_cwd
+    assert result.stdout == "partial output\n"
+
+
+async def test_execute_spawn_oserror_returns_error_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An OSError spawning the subprocess yields a graceful error result."""
+    shell = _make_shell(monkeypatch)
+
+    async def fake_spawn(exe: str, script: str, stderr_path: str) -> object:
+        raise OSError("no such file")
+
+    monkeypatch.setattr(shell, "_spawn", fake_spawn)
+    result = await shell.execute("echo hi")
     assert result.exit_code == 1
+    assert "no such file" in result.stderr
 
 
-async def test_env_parses_name_value_pairs() -> None:
+async def test_env_parses_name_value_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """env() splits KEY=VALUE lines from the mocked `env` output."""
+    shell = _make_shell(monkeypatch)
 
-    def respond(wrapped: str, marker: str) -> str:
+    async def fake_spawn(exe: str, script: str, stderr_path: str) -> object:
+        match = re.search(rf"{re.escape(_SENTINEL)}_[0-9a-f]+", script)
+        assert match is not None
         body = "PATH=/usr/bin\nHOME=/home/x\n"
-        return f"{body}{marker}:0:/home/x\n"
+        return _FakeProcess(f"{body}{match.group(0)}:0:/home/x\n".encode())
 
-    shell = FishShell()
-    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    monkeypatch.setattr(shell, "_spawn", fake_spawn)
     env = await shell.env()
     assert env == {"PATH": "/usr/bin", "HOME": "/home/x"}
 
 
-async def test_complete_returns_completion_matches_without_descriptions() -> (
-    None
-):
+async def test_complete_returns_completion_matches_without_descriptions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """complete() strips the tab-separated description from each match."""
+    shell = _make_shell(monkeypatch)
 
-    def respond(wrapped: str, marker: str) -> str:
+    async def fake_spawn(exe: str, script: str, stderr_path: str) -> object:
+        match = re.search(rf"{re.escape(_SENTINEL)}_[0-9a-f]+", script)
+        assert match is not None
         body = "echo\tSend arguments to stdout\nenv\tRun a program\n"
-        return f"{body}{marker}:0:/home/x\n"
+        return _FakeProcess(f"{body}{match.group(0)}:0:/home/x\n".encode())
 
-    shell = FishShell()
-    shell._process = _FakeProcess(respond)  # type: ignore[assignment]
+    monkeypatch.setattr(shell, "_spawn", fake_spawn)
     matches = await shell.complete("e")
     assert matches == ["echo", "env"]
 
@@ -267,10 +297,10 @@ async def test_can_parse_true_when_parser_accepts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """can_parse is True when the mocked --no-execute check exits zero."""
+    shell = _make_shell(monkeypatch)
     monkeypatch.setattr(
         subprocess, "run", lambda *a, **k: _fake_completed_process(0)
     )
-    shell = FishShell()
     assert await shell.can_parse("echo hi") is True
 
 
@@ -278,10 +308,10 @@ async def test_can_parse_false_when_parser_rejects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """can_parse is False when the mocked --no-execute check exits nonzero."""
+    shell = _make_shell(monkeypatch)
     monkeypatch.setattr(
         subprocess, "run", lambda *a, **k: _fake_completed_process(127)
     )
-    shell = FishShell()
     assert await shell.can_parse(")(invalid((") is False
 
 
@@ -289,6 +319,7 @@ async def test_can_parse_false_on_subprocess_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """can_parse is False when the syntax-check subprocess times out."""
+    shell = _make_shell(monkeypatch)
 
     def _raise(
         *args: object, **kwargs: object
@@ -296,6 +327,14 @@ async def test_can_parse_false_on_subprocess_timeout(
         raise subprocess.TimeoutExpired(cmd="fish", timeout=1.0)
 
     monkeypatch.setattr(subprocess, "run", _raise)
+    assert await shell.can_parse("echo hi") is False
+
+
+async def test_can_parse_missing_fish_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """can_parse returns False rather than raising when fish is missing."""
+    monkeypatch.setattr(fish_module.shutil, "which", lambda name: None)
     shell = FishShell()
     assert await shell.can_parse("echo hi") is False
 
@@ -346,6 +385,74 @@ async def test_append_history_write_runs_off_the_event_loop(
     assert write_thread is not main_thread
 
 
+class _HangingFakeProcess:
+    """Stand-in process whose stdout never delivers data or EOF.
+
+    Unlike _FakeProcess (which always feeds EOF in __init__ and so
+    can never actually hang), this stands in for a genuinely stuck
+    command: read_until_sentinel blocks on it forever, exactly like a
+    real hung fish process, until something cancels the awaiting task.
+    """
+
+    def __init__(self) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.returncode: int | None = None
+
+    def kill(self) -> None:
+        """Mark the process as terminated by kill."""
+        self.returncode = -9
+
+    async def wait(self) -> None:
+        """No-op: nothing left to reap."""
+
+
+async def test_execute_cancellation_kills_in_flight_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling execute() (e.g. via asyncio.wait_for) kills the subprocess."""
+    shell = _make_shell(monkeypatch)
+    proc = _HangingFakeProcess()
+
+    async def fake_spawn(exe: str, script: str, stderr_path: str) -> object:
+        return proc
+
+    monkeypatch.setattr(shell, "_spawn", fake_spawn)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(shell.execute("sleep 999"), timeout=0.05)
+    assert proc.returncode == -9
+    assert shell._current_proc is None
+
+
+async def test_reset_kills_in_flight_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """reset() kills the current subprocess if one is in flight."""
+    shell = _make_shell(monkeypatch)
+    fake = _FakeProcess(b"", returncode=None)
+    shell._current_proc = fake  # type: ignore[assignment]
+    await shell.reset()
+    assert fake.returncode == -9
+
+
+async def test_reset_noop_without_in_flight_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """reset() is a no-op when no command is currently running."""
+    shell = _make_shell(monkeypatch)
+    await shell.reset()
+
+
+async def test_close_delegates_to_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """close() kills an in-flight subprocess the same way reset() does."""
+    shell = _make_shell(monkeypatch)
+    fake = _FakeProcess(b"", returncode=None)
+    shell._current_proc = fake  # type: ignore[assignment]
+    await shell.close()
+    assert fake.returncode == -9
+
+
 requires_fish = pytest.mark.skipif(
     shutil.which("fish") is None, reason="fish not installed"
 )
@@ -367,6 +474,20 @@ class TestFishIntegration:
         result = await shell.execute("echo hello")
         assert result.stdout.strip() == "hello"
         assert result.exit_code == 0
+
+    async def test_execute_does_not_hang_on_piped_stdin(
+        self, shell: FishShell
+    ) -> None:
+        """A real fish command completes promptly rather than hanging.
+
+        Regression test for #56: fish previously never ran anything fed
+        over a piped stdin until EOF, so a persistent-process-backed
+        execute() call hung forever. asyncio.wait_for with a short
+        timeout turns that hang into a fast, clean test failure instead
+        of a suite that never completes.
+        """
+        result = await asyncio.wait_for(shell.execute("echo hello"), timeout=5)
+        assert result.stdout.strip() == "hello"
 
     async def test_execute_captures_stderr(self, shell: FishShell) -> None:
         """Execute captures stderr separately."""
