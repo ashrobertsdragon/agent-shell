@@ -61,11 +61,18 @@ def _default_history_path() -> Path:
 
 
 def _complete_from_path(prefix: str, path: str) -> list[str]:
-    """Return executable names on PATH whose name starts with prefix."""
+    """Return executable names on PATH whose name starts with prefix.
+
+    Empty PATH components are skipped outright rather than treated as
+    the current directory: an unset or empty PATH should yield no
+    completions, not silently scan cwd as if it were on PATH.
+    """
     matches: set[str] = set()
     for directory in path.split(os.pathsep):
+        if not directory:
+            continue
         try:
-            entries = os.scandir(directory or ".")
+            entries = os.scandir(directory)
         except OSError:
             continue
         with entries:
@@ -359,6 +366,12 @@ class NuShellShell:
         paths shouldn't contain a single quote in practice, but a
         custom TMPDIR could, and embedding it directly would corrupt
         the script rather than fail safely.
+
+        OSError (e.g. FileNotFoundError if the cached nu executable
+        path stops existing between calls -- an uninstall or PATH
+        change after `_resolve_exe` already cached it) is treated the
+        same as an unparsable script rather than left to crash the
+        caller.
         """
 
         def _check() -> bool:
@@ -388,7 +401,7 @@ class NuShellShell:
                 finally:
                     Path(tmp_path).unlink(missing_ok=True)
                 return result.returncode == 0
-            except subprocess.TimeoutExpired:
+            except (subprocess.TimeoutExpired, OSError):
                 return False
 
         return await asyncio.to_thread(_check)

@@ -271,6 +271,17 @@ async def test_complete_skips_missing_path_dirs(
     assert await shell.complete("x") == []
 
 
+async def test_complete_empty_path_does_not_scan_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An empty PATH yields no completions rather than scanning cwd."""
+    (tmp_path / "sneaky").touch(mode=0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "")
+    shell = _make_shell(monkeypatch)
+    assert await shell.complete("sneaky") == []
+
+
 async def test_can_parse_valid_script(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -316,6 +327,21 @@ async def test_can_parse_timeout_returns_false(
         *args: object, **kwargs: object
     ) -> subprocess.CompletedProcess[bytes]:
         raise subprocess.TimeoutExpired(cmd="nu", timeout=2.0)
+
+    monkeypatch.setattr(nushell_module.subprocess, "run", _raise)
+    assert await shell.can_parse("print hi") is False
+
+
+async def test_can_parse_oserror_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raised OSError (e.g. the cached nu path vanishing) is not fatal."""
+    shell = _make_shell(monkeypatch)
+
+    def _raise(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        raise FileNotFoundError("nu")
 
     monkeypatch.setattr(nushell_module.subprocess, "run", _raise)
     assert await shell.can_parse("print hi") is False
