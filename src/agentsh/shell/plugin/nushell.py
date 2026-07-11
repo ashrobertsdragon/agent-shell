@@ -257,8 +257,11 @@ class NuShellShell:
                     await proc.wait()
                 except asyncio.CancelledError:
                     if proc.returncode is None:
-                        proc.kill()
-                        await proc.wait()
+                        try:
+                            proc.kill()
+                            await proc.wait()
+                        except OSError:
+                            pass
                     raise
                 finally:
                     self._current_proc = None
