@@ -24,7 +24,7 @@ the parsed table straight into the corresponding dataclass constructor.
 # Which shell backend to drive. "auto" detects from environment
 # variables ($SHELL, $PSModulePath, $CMDCMDLINE); set explicitly to skip
 # detection or to force a backend detection wouldn't pick.
-shell = "auto"  # "auto" | "bash" | "zsh" | "cmd" | "powershell"
+shell = "auto"  # "auto" | "bash" | "zsh" | "fish" | "nu" | "cmd" | "powershell"
 
 [agent]
 # Model identifier passed straight through to the provider's SDK.
@@ -80,18 +80,18 @@ in TOML (not a top-level `[permissions]` table with `allow`/`confirm`/
 
 ## Field reference
 
-| Key                         | Type                         | Default                                                               | Notes                                                   |
-| --------------------------- | ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------- |
-| `shell`                     | string                       | `"auto"`                                                              | `"auto"`, `"bash"`, `"zsh"`, `"cmd"`, or `"powershell"` |
-| `agent.model`               | string                       | `"claude-sonnet-4-6"`                                                 | Passed to the provider SDK verbatim                     |
-| `agent.provider`            | string                       | `"anthropic"`                                                         | Selects `agentsh.agent.<provider>`                      |
-| `agent.web_fetch`           | bool                         | `false`                                                               | Reserved; not wired to a backend yet                    |
-| `agent.max_tokens`          | int                          | `4096`                                                                | Passed to the provider SDK                              |
-| `context.timeout_ms`        | int                          | `200`                                                                 | Per-provider collection timeout                         |
-| `context.providers`         | list[string]                 | `["git", "filesystem", "python", "docker", "history", "environment"]` | Order is preserved                                      |
-| `permissions.rules.allow`   | list[string] (fnmatch globs) | `[]`                                                                  |                                                         |
-| `permissions.rules.confirm` | list[string] (fnmatch globs) | `[]`                                                                  |                                                         |
-| `permissions.rules.deny`    | list[string] (fnmatch globs) | `[]`                                                                  | Checked first                                           |
+| Key                         | Type                         | Default                                                               | Notes                                                                     |
+| --------------------------- | ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `shell`                     | string                       | `"auto"`                                                              | `"auto"`, `"bash"`, `"zsh"`, `"fish"`, `"nu"`, `"cmd"`, or `"powershell"` |
+| `agent.model`               | string                       | `"claude-sonnet-4-6"`                                                 | Passed to the provider SDK verbatim                                       |
+| `agent.provider`            | string                       | `"anthropic"`                                                         | Selects `agentsh.agent.<provider>`                                        |
+| `agent.web_fetch`           | bool                         | `false`                                                               | Reserved; not wired to a backend yet                                      |
+| `agent.max_tokens`          | int                          | `4096`                                                                | Passed to the provider SDK                                                |
+| `context.timeout_ms`        | int                          | `200`                                                                 | Per-provider collection timeout                                           |
+| `context.providers`         | list[string]                 | `["git", "filesystem", "python", "docker", "history", "environment"]` | Order is preserved                                                        |
+| `permissions.rules.allow`   | list[string] (fnmatch globs) | `[]`                                                                  |                                                                           |
+| `permissions.rules.confirm` | list[string] (fnmatch globs) | `[]`                                                                  |                                                                           |
+| `permissions.rules.deny`    | list[string] (fnmatch globs) | `[]`                                                                  | Checked first                                                             |
 
 ## Environment variables
 
