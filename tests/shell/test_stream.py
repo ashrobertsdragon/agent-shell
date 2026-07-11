@@ -101,3 +101,43 @@ async def test_transform_not_applied_to_truncated_output() -> None:
     )
     assert output == "kept\n" + truncation_marker(10)
     assert sentinel == "SENTINEL:0:/tmp\n"
+
+
+def _strip_noise_marker(decoded: str) -> str:
+    """Stand-in noise-stripper: drops a leading '!!' from a line."""
+    return decoded.removeprefix("!!")
+
+
+async def test_strip_noise_applied_before_sentinel_check() -> None:
+    """strip_noise runs before the sentinel-prefix check, not just on output.
+
+    Without stripping first, the noise-prefixed sentinel line would
+    never match sentinel_prefix and read_until_sentinel would never
+    return -- this is exactly the PowerShell VT100-noise bug strip_noise
+    exists to fix.
+    """
+    reader = _reader(b"!!hello\n", b"!!SENTINEL:0:/tmp\n")
+    output, sentinel = await read_until_sentinel(
+        reader, "SENTINEL:", strip_noise=_strip_noise_marker
+    )
+    assert output == "hello\n"
+    assert sentinel == "SENTINEL:0:/tmp\n"
+
+
+async def test_strip_noise_applied_in_truncation_discard_branch() -> None:
+    """strip_noise also applies once output has already been truncated.
+
+    Exercises the `marker is not None` discard branch: after truncation
+    kicks in, a noise-prefixed sentinel line must still be recognised,
+    not just when output hasn't yet exceeded max_bytes.
+    """
+    reader = _reader(
+        b"a" * 100 + b"\n",
+        b"!!more\n",
+        b"!!SENTINEL:0:/tmp\n",
+    )
+    output, sentinel = await read_until_sentinel(
+        reader, "SENTINEL:", max_bytes=10, strip_noise=_strip_noise_marker
+    )
+    assert output == truncation_marker(10)
+    assert sentinel == "SENTINEL:0:/tmp\n"

@@ -36,6 +36,7 @@ async def read_until_sentinel(
     *,
     max_bytes: int = MAX_OUTPUT_BYTES,
     transform: Callable[[str], str] | None = None,
+    strip_noise: Callable[[str], str] | None = None,
 ) -> tuple[str, str]:
     """Collect decoded stdout lines until one starts with sentinel_prefix.
 
@@ -45,6 +46,12 @@ async def read_until_sentinel(
         max_bytes: Hard cap on buffered output before truncation kicks in.
         transform: Optional per-line post-decode transform (e.g. cmd.exe's
             CRLF normalisation) applied only to lines kept in the output.
+        strip_noise: Optional per-line post-decode cleanup applied before
+            *both* the sentinel-prefix check and transform/appending (e.g.
+            PowerShell's `-Command -` mode unconditionally prefixing every
+            line with VT100 escape codes). Unlike transform, this must run
+            before the sentinel check too, since the noise would otherwise
+            corrupt the prefix match, not just the kept output.
 
     Returns:
         tuple[str, str]: The collected output, and the raw decoded
@@ -76,11 +83,22 @@ async def read_until_sentinel(
             return finish(), ""
         if marker is not None:
             # Already discarding output: skip the decode unless this line
-            # might be the sentinel we're still watching for.
+            # might be the sentinel we're still watching for. The raw
+            # check runs even when strip_noise is set: sentinel_prefix
+            # never starts with the noise pattern, so a raw match still
+            # means a real sentinel, and it avoids a decode+strip on
+            # every discarded line for a caller whose noise doesn't
+            # appear on every line.
             if line.startswith(sentinel_bytes):
                 return finish(), line.decode(errors="replace")
+            if strip_noise is not None:
+                candidate = strip_noise(line.decode(errors="replace"))
+                if candidate.startswith(sentinel_prefix):
+                    return finish(), candidate
             continue
         decoded = line.decode(errors="replace")
+        if strip_noise is not None:
+            decoded = strip_noise(decoded)
         if decoded.startswith(sentinel_prefix):
             return finish(), decoded
         total += len(line)
