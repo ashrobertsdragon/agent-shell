@@ -214,6 +214,11 @@ class FishShell:
                             sentinel_line,
                         ) = await read_until_sentinel(proc.stdout, f"{marker}:")
                     await proc.wait()
+                except asyncio.CancelledError:
+                    if proc.returncode is None:
+                        proc.kill()
+                        await proc.wait()
+                    raise
                 finally:
                     self._current_proc = None
 
@@ -363,13 +368,19 @@ class FishShell:
 
         There is no persistent process to restart -- the next execute()
         call always spawns a fresh one -- so this only matters for
-        abandoning a command that timed out mid-flight.
+        abandoning a command that timed out mid-flight. Deliberately
+        does not take self._lock: execute() holds that lock for its
+        whole duration, so a caller aborting a hung command (the
+        entire point of reset()) would otherwise deadlock waiting for
+        the very lock the hung execute() call is holding.
         """
-        async with self._lock:
-            proc = self._current_proc
-            if proc is not None and proc.returncode is None:
+        proc = self._current_proc
+        if proc is not None and proc.returncode is None:
+            try:
                 proc.kill()
                 await proc.wait()
+            except OSError:
+                pass
 
     async def close(self) -> None:
         """Terminate the in-flight one-shot subprocess, if any."""
