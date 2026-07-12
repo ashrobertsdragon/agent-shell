@@ -412,6 +412,44 @@ async def test_history_read_runs_off_the_event_loop(
     assert read_thread is not main_thread
 
 
+class _HangingFakeProcess:
+    """Stand-in process whose stdout never delivers data or EOF.
+
+    Unlike _FakeProcess (which always feeds EOF in __init__ and so can
+    never actually hang), this stands in for a genuinely stuck command:
+    read_until_sentinel blocks on it forever, exactly like a real hung
+    nu process, until something cancels the awaiting task.
+    """
+
+    def __init__(self) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.returncode: int | None = None
+
+    def kill(self) -> None:
+        """Mark the process as terminated by kill."""
+        self.returncode = -9
+
+    async def wait(self) -> None:
+        """No-op: nothing left to reap."""
+
+
+async def test_execute_cancellation_kills_in_flight_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling execute() (e.g. via asyncio.wait_for) kills the subprocess."""
+    shell = _make_shell(monkeypatch)
+    proc = _HangingFakeProcess()
+
+    async def fake_spawn(exe: str, script: str, stderr_path: str) -> object:
+        return proc
+
+    monkeypatch.setattr(shell, "_spawn", fake_spawn)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(shell.execute("sleep 999sec"), timeout=0.05)
+    assert proc.returncode == -9
+    assert shell._current_proc is None
+
+
 async def test_reset_kills_in_flight_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
