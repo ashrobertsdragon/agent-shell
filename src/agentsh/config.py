@@ -43,12 +43,13 @@ class ContextConfig:
 
 
 @dataclass
-class PermissionRulesConfig:
+class PermissionsConfig:
     """Declarative allow/confirm/deny rules for the permission engine."""
 
     allow: set[str] = field(default_factory=set)
     confirm: set[str] = field(default_factory=set)
     deny: set[str] = field(default_factory=set)
+    write_roots: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -65,15 +66,12 @@ class Config:
     shell: str = "auto"
     agent: AgentConfig = field(default_factory=AgentConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
-    permissions: PermissionRulesConfig = field(
-        default_factory=PermissionRulesConfig
-    )
-    write_roots: list[str] = field(default_factory=list)
+    permissions: PermissionsConfig = field(default_factory=PermissionsConfig)
 
 
 def load_config(path: Path | None = None) -> Config:
     """Load config from path, falling back to defaults for any missing keys."""
-    if path is None:
+    if not path:
         path = Path.home() / ".config" / "agentsh" / "config.toml"
 
     if not path.exists():
@@ -90,12 +88,7 @@ def load_config(path: Path | None = None) -> Config:
     context_raw: dict = raw.get("context", {})
     context = ContextConfig(**context_raw)
 
-    perm_raw = raw.get("permissions", {}).get("rules", {})
-    permissions = PermissionRulesConfig(
-        allow=set(perm_raw.get("allow", [])),
-        confirm=set(perm_raw.get("confirm", [])),
-        deny=set(perm_raw.get("deny", [])),
-    )
+    perm_raw = raw.get("permissions", {})
 
     write_roots_raw = raw.get("write_roots", [])
     if isinstance(write_roots_raw, str):
@@ -103,12 +96,16 @@ def load_config(path: Path | None = None) -> Config:
             "write_roots must be a list of paths, not a bare string "
             f"(got {write_roots_raw!r}); did you mean [{write_roots_raw!r}]?"
         )
-    write_roots: list[str] = list(write_roots_raw)
+    permissions = PermissionsConfig(
+        allow=set(perm_raw.get("allow", [])),
+        confirm=set(perm_raw.get("confirm", [])),
+        deny=set(perm_raw.get("deny", [])),
+        write_roots=write_roots_raw,
+    )
 
     return Config(
         shell=shell,
         agent=agent,
         context=context,
         permissions=permissions,
-        write_roots=write_roots,
     )

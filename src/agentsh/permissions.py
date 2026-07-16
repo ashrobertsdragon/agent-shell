@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from enum import Enum, auto
 from fnmatch import fnmatch
 
-from agentsh.config import PermissionRulesConfig
+from agentsh.config import PermissionsConfig
 from agentsh.models import JsonValue
 
 _RUN_COMMAND_PREFIX = "RunCommand:"

@@ -61,7 +61,9 @@ def _build_app() -> App:
         RunCommand(shell=shell, permissions=permissions, confirm=confirm)
     )
     app.tools.register(ReadFile(permissions=permissions, confirm=confirm))
-    write_roots = [canonical_path(root) for root in config.write_roots]
+    write_roots = [
+        canonical_path(root) for root in config.permissions.write_roots
+    ]
     app.tools.register(
         WriteFile(
             permissions=permissions,
