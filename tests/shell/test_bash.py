@@ -1,5 +1,6 @@
 """Integration tests for BashShell against a real bash subprocess."""
 
+import os
 import shlex
 import stat
 import threading
@@ -50,6 +51,21 @@ async def test_execute_echo(shell: BashShell) -> None:
     result = await shell.execute("echo hello")
     assert result.stdout.strip() == "hello"
     assert result.exit_code == 0
+
+
+async def test_backend_runs_in_its_own_session(shell: BashShell) -> None:
+    """The bash -i backend must not share our session.
+
+    An interactive shell enables job control and calls tcsetpgrp to seize
+    the terminal's foreground process group. In a shared session that
+    backgrounds agentsh, whose next terminal read raises SIGTTIN and stops
+    the process. Spawning into a new session denies the child a
+    controlling terminal, so it cannot take ours.
+    """
+    await shell.execute("true")
+    proc = shell._process
+    assert proc is not None
+    assert os.getsid(proc.pid) != os.getsid(0)
 
 
 async def test_execute_captures_stderr(shell: BashShell) -> None:

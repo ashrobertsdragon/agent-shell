@@ -76,6 +76,14 @@ class BashShell(ProcessBackedShell):
         were previously missing because the backend was non-interactive).
         ``prime_interactive_process`` disables history expansion and
         drains any rc banner before the first command runs.
+
+        ``start_new_session`` is required: an interactive shell enables job
+        control and calls ``tcsetpgrp`` to make itself the terminal's
+        foreground process group. Sharing our session would hand it our
+        controlling terminal, leaving agentsh in the background, so the
+        REPL's next terminal read would raise ``SIGTTIN`` and stop the
+        process. A new session gives the child no controlling terminal, so
+        it silently skips job control and leaves our tty alone.
         """
         proc = await asyncio.create_subprocess_exec(
             "bash",
@@ -83,6 +91,7 @@ class BashShell(ProcessBackedShell):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
         )
         await prime_interactive_process(proc, "set +H", _SENTINEL)
         return proc
