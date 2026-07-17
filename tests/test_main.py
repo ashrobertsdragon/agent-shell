@@ -10,7 +10,7 @@ from agentsh.config import (
     AgentConfig,
     Config,
     ContextConfig,
-    PermissionRulesConfig,
+    PermissionsConfig,
 )
 from agentsh.context.providers import UnknownProviderError
 from agentsh.main import _build_app, main
@@ -24,8 +24,9 @@ def _config(*, write_roots: list[str] | None = None) -> Config:
         shell="bash",
         agent=AgentConfig(provider="anthropic"),
         context=ContextConfig(providers=["git"], timeout_ms=150),
-        permissions=PermissionRulesConfig(allow={"ReadFile:*"}),
-        write_roots=write_roots or [],
+        permissions=PermissionsConfig(
+            allow={"ReadFile:*"}, write_roots=write_roots or []
+        ),
     )
 
 

@@ -78,6 +78,26 @@ async def test_execute_captures_stderr(shell: ZshShell) -> None:
 
 
 @requires_zsh
+async def test_backend_is_interactive(shell: ZshShell) -> None:
+    """The persistent zsh runs interactively so it sources rc files.
+
+    ``$-`` contains ``i`` only for an interactive shell; this is what
+    makes the user's aliases, functions and prompt hooks available.
+    """
+    result = await shell.execute("[[ $- == *i* ]] && echo INTERACTIVE")
+    assert result.stdout.strip() == "INTERACTIVE"
+    assert result.exit_code == 0
+
+
+@requires_zsh
+async def test_history_expansion_disabled(shell: ZshShell) -> None:
+    """A literal ``!`` is not history-expanded despite interactive mode."""
+    result = await shell.execute("echo 'a!b'")
+    assert result.stdout.strip() == "a!b"
+    assert result.exit_code == 0
+
+
+@requires_zsh
 async def test_execute_tracks_exit_code(shell: ZshShell) -> None:
     """Execute returns the last exit code."""
     result = await shell.execute("false")

@@ -2,14 +2,14 @@
 
 import pytest
 
-from agentsh.config import PermissionRulesConfig
+from agentsh.config import PermissionsConfig
 from agentsh.permissions import PermissionEngine, PermissionLevel
 
 
 @pytest.fixture
 def engine() -> PermissionEngine:
     """Permission engine with representative allow/confirm/deny rules."""
-    rules = PermissionRulesConfig(
+    rules = PermissionsConfig(
         allow={"RunCommand:ls*", "RunCommand:pwd", "ReadFile:*"},
         confirm={"RunCommand:git commit*", "WriteFile:*"},
         deny={"RunCommand:rm -rf*"},
@@ -34,7 +34,7 @@ def test_deny(engine: PermissionEngine) -> None:
 
 def test_deny_beats_allow() -> None:
     """A deny pattern wins even when an allow pattern also matches."""
-    rules = PermissionRulesConfig(
+    rules = PermissionsConfig(
         allow={"RunCommand:rm*"},
         deny={"RunCommand:rm -rf*"},
     )
@@ -82,14 +82,14 @@ def test_shell_metacharacters_block_wildcard_allow(command: str) -> None:
     rule such as ``RunCommand:git *`` used to match (and ALLOW) chained
     or substituted commands riding along after the allowed prefix.
     """
-    rules = PermissionRulesConfig(allow={"RunCommand:git *"})
+    rules = PermissionsConfig(allow={"RunCommand:git *"})
     engine = PermissionEngine(rules)
     assert engine.evaluate(f"RunCommand:{command}") == PermissionLevel.CONFIRM
 
 
 def test_shell_metacharacters_do_not_override_deny() -> None:
     """A deny rule still wins even when metacharacters are present."""
-    rules = PermissionRulesConfig(
+    rules = PermissionsConfig(
         allow={"RunCommand:git *"},
         deny={"RunCommand:*rm -rf*"},
     )
@@ -102,7 +102,7 @@ def test_shell_metacharacters_do_not_override_deny() -> None:
 
 def test_plain_command_without_metacharacters_still_allowed() -> None:
     """Safe commands with no metacharacters keep the existing fnmatch behavior."""
-    rules = PermissionRulesConfig(allow={"RunCommand:git *"})
+    rules = PermissionsConfig(allow={"RunCommand:git *"})
     engine = PermissionEngine(rules)
     assert engine.evaluate("RunCommand:git status") == PermissionLevel.ALLOW
 
@@ -118,6 +118,6 @@ def test_plain_command_without_metacharacters_still_allowed() -> None:
 )
 def test_unbalanced_quotes_force_confirm(command: str) -> None:
     """Commands shlex cannot tokenize are treated as suspicious."""
-    rules = PermissionRulesConfig(allow={"RunCommand:git *"})
+    rules = PermissionsConfig(allow={"RunCommand:git *"})
     engine = PermissionEngine(rules)
     assert engine.evaluate(f"RunCommand:{command}") == PermissionLevel.CONFIRM

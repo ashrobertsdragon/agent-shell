@@ -59,6 +59,24 @@ async def test_execute_captures_stderr(shell: BashShell) -> None:
     assert result.exit_code == 0
 
 
+async def test_backend_is_interactive(shell: BashShell) -> None:
+    """The persistent bash runs interactively so it sources rc files.
+
+    ``$-`` contains ``i`` only for an interactive shell; this is what
+    makes the user's aliases, functions and prompt available.
+    """
+    result = await shell.execute("[[ $- == *i* ]] && echo INTERACTIVE")
+    assert result.stdout.strip() == "INTERACTIVE"
+    assert result.exit_code == 0
+
+
+async def test_history_expansion_disabled(shell: BashShell) -> None:
+    """A literal ``!`` is not history-expanded despite interactive mode."""
+    result = await shell.execute("echo 'a!b'")
+    assert result.stdout.strip() == "a!b"
+    assert result.exit_code == 0
+
+
 async def test_execute_tracks_exit_code(shell: BashShell) -> None:
     """Execute returns the last exit code."""
     result = await shell.execute("false")

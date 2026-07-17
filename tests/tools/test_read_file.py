@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agentsh.config import PermissionRulesConfig
+from agentsh.config import PermissionsConfig
 from agentsh.limits import MAX_OUTPUT_BYTES, truncation_marker
 from agentsh.permissions import PermissionDeniedError, PermissionEngine
 from agentsh.tools.read_file import ReadFile
@@ -14,7 +14,7 @@ from agentsh.tools.read_file import ReadFile
 @pytest.fixture
 def allow_all() -> PermissionEngine:
     """PermissionEngine that ALLOWs every ReadFile call."""
-    return PermissionEngine(PermissionRulesConfig(allow={"ReadFile:*"}))
+    return PermissionEngine(PermissionsConfig(allow={"ReadFile:*"}))
 
 
 async def test_read_existing_file(
@@ -85,7 +85,7 @@ async def test_read_deny_raises_without_touching_file(
     f = tmp_path / "secret.txt"
     f.write_text("top secret")
     key = f"ReadFile:{f.resolve().as_posix()}"
-    permissions = PermissionEngine(PermissionRulesConfig(deny={key}))
+    permissions = PermissionEngine(PermissionsConfig(deny={key}))
     tool = ReadFile(permissions=permissions)
     with pytest.raises(PermissionDeniedError):
         await tool.invoke(path=str(f))
@@ -98,7 +98,7 @@ async def test_read_confirm_blocks_without_callback(tmp_path: Path) -> None:
     f = tmp_path / "secret.txt"
     f.write_text("top secret")
     key = f"ReadFile:{f.resolve().as_posix()}"
-    permissions = PermissionEngine(PermissionRulesConfig(confirm={key}))
+    permissions = PermissionEngine(PermissionsConfig(confirm={key}))
     tool = ReadFile(permissions=permissions)
     with pytest.raises(PermissionDeniedError):
         await tool.invoke(path=str(f))
@@ -111,7 +111,7 @@ async def test_read_confirm_proceeds_when_callback_approves(
     f = tmp_path / "secret.txt"
     f.write_text("top secret")
     key = f"ReadFile:{f.resolve().as_posix()}"
-    permissions = PermissionEngine(PermissionRulesConfig(confirm={key}))
+    permissions = PermissionEngine(PermissionsConfig(confirm={key}))
     confirm = AsyncMock(return_value=True)
     tool = ReadFile(permissions=permissions, confirm=confirm)
     assert await tool.invoke(path=str(f)) == "top secret"
@@ -124,7 +124,7 @@ async def test_read_confirm_blocks_when_callback_declines(
     f = tmp_path / "secret.txt"
     f.write_text("top secret")
     key = f"ReadFile:{f.resolve().as_posix()}"
-    permissions = PermissionEngine(PermissionRulesConfig(confirm={key}))
+    permissions = PermissionEngine(PermissionsConfig(confirm={key}))
     confirm = AsyncMock(return_value=False)
     tool = ReadFile(permissions=permissions, confirm=confirm)
     with pytest.raises(PermissionDeniedError):

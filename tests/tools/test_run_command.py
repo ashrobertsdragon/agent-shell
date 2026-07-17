@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agentsh.config import PermissionRulesConfig
+from agentsh.config import PermissionsConfig
 from agentsh.limits import MAX_OUTPUT_BYTES, truncation_marker
 from agentsh.models import CommandResult
 from agentsh.permissions import PermissionDeniedError, PermissionEngine
@@ -31,7 +31,7 @@ def mock_shell() -> AsyncMock:
 @pytest.fixture
 def allow_all() -> PermissionEngine:
     """PermissionEngine that ALLOWs every RunCommand call."""
-    return PermissionEngine(PermissionRulesConfig(allow={"RunCommand:*"}))
+    return PermissionEngine(PermissionsConfig(allow={"RunCommand:*"}))
 
 
 async def test_run_command_invokes_shell(
@@ -73,7 +73,7 @@ async def test_run_command_truncates_oversized_shell_output(
 
 async def test_run_command_deny_raises(mock_shell: AsyncMock) -> None:
     """A DENY-matched command raises PermissionDeniedError."""
-    rules = PermissionRulesConfig(deny={"RunCommand:rm*"})
+    rules = PermissionsConfig(deny={"RunCommand:rm*"})
     permissions = PermissionEngine(rules)
     tool = RunCommand(shell=mock_shell, permissions=permissions)
     with pytest.raises(PermissionDeniedError):
@@ -89,7 +89,7 @@ async def test_run_command_confirm_blocks_without_callback(
     internal enforcement exists to close (calling the tool without going
     through the agent loop at all).
     """
-    rules = PermissionRulesConfig(confirm={"RunCommand:git commit*"})
+    rules = PermissionsConfig(confirm={"RunCommand:git commit*"})
     permissions = PermissionEngine(rules)
     tool = RunCommand(shell=mock_shell, permissions=permissions)
     with pytest.raises(PermissionDeniedError):
@@ -103,7 +103,7 @@ async def test_run_command_confirm_blocks_when_callback_declines(
     """A CONFIRM-matched command is blocked when the confirm callback
     declines the call.
     """
-    rules = PermissionRulesConfig(confirm={"RunCommand:git commit*"})
+    rules = PermissionsConfig(confirm={"RunCommand:git commit*"})
     permissions = PermissionEngine(rules)
     confirm = AsyncMock(return_value=False)
     tool = RunCommand(
@@ -123,7 +123,7 @@ async def test_run_command_confirm_proceeds_when_callback_approves(
     """A CONFIRM-matched command executes once the confirm callback
     approves it.
     """
-    rules = PermissionRulesConfig(confirm={"RunCommand:git commit*"})
+    rules = PermissionsConfig(confirm={"RunCommand:git commit*"})
     permissions = PermissionEngine(rules)
     confirm = AsyncMock(return_value=True)
     tool = RunCommand(
@@ -146,7 +146,7 @@ async def test_run_command_allow_wildcard_does_not_bypass_metacharacters(
     metacharacter bypass; the engine must force CONFIRM instead, and
     without a confirm callback the tool refuses to execute it.
     """
-    rules = PermissionRulesConfig(allow={"RunCommand:git *"})
+    rules = PermissionsConfig(allow={"RunCommand:git *"})
     permissions = PermissionEngine(rules)
     tool = RunCommand(shell=mock_shell, permissions=permissions)
     with pytest.raises(PermissionDeniedError):

@@ -5,24 +5,24 @@ from __future__ import annotations
 import sys
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
-from typing import cast
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 
 from agentsh.agent_loop import AgentLoopLimitError, run_agent_loop
 from agentsh.app import App
 from agentsh.classifier import InputKind, agent_query, classify
 from agentsh.events import CommandFinished, CommandStarted, ContextCollected
 from agentsh.history_security import ensure_secure_file
+from agentsh.limits import truncate_text
 from agentsh.models import CommandResult, JsonValue, Message
-from agentsh.permissions import (
-    PermissionDeniedError,
-    PermissionLevel,
-    tool_call_key,
-)
+
+_EXIT_KEYWORDS = frozenset({"exit", "quit"})
 
 _PREVIEW_MAX_CHARS = 2000
 
@@ -98,18 +98,61 @@ class UI:
             return False
 
 
+def _handle_ctrl_c(event: KeyPressEvent) -> None:
+    """Clear the current input line, or quit agentsh if the prompt is empty.
+
+    This mirrors a real shell: Ctrl+C on a partially typed line discards
+    that line without leaving the REPL, but Ctrl+C at an empty prompt is
+    an explicit exit (alongside ``exit``/``quit`` and Ctrl+D), so there is
+    always an obvious way out. Exiting is signalled by making
+    ``prompt_async`` raise ``EOFError``, which the loop already treats as
+    a clean break.
+    """
+    if event.current_buffer.text:
+        event.current_buffer.reset()
+    else:
+        event.app.exit(exception=EOFError())
+
+
+def _build_key_bindings() -> KeyBindings:
+    """Return the REPL's prompt key bindings (currently just Ctrl+C)."""
+    bindings = KeyBindings()
+    bindings.add("c-c")(_handle_ctrl_c)
+    return bindings
+
+
 async def run_repl(app: App) -> None:
     """Run the main REPL loop until EOF or KeyboardInterrupt."""
     history_dir = Path.home() / ".local" / "share" / "agentsh"
     history_path = history_dir / "history"
     ensure_secure_file(history_path)
     session: PromptSession[str] = PromptSession(
-        history=FileHistory(str(history_path))
+        history=FileHistory(str(history_path)),
+        key_bindings=_build_key_bindings(),
     )
     ui = UI(session)
     app.ui = ui
-    bus = app.event_bus
 
+    try:
+        await _repl_loop(app, session, ui)
+    finally:
+        await app.shell.close()
+
+
+async def _repl_loop(
+    app: App,
+    session: PromptSession[str],
+    ui: UI,
+) -> None:
+    """Drive the prompt/classify/dispatch loop until the user exits.
+
+    User-typed shell input is executed directly on the shell backend and
+    is deliberately not routed through the permission engine: the engine
+    exists to constrain the agent's tool calls, not the human at the
+    keyboard. Only the AGENT path runs through permission enforcement
+    (inside each tool's own invoke()).
+    """
+    bus = app.event_bus
     while True:
         try:
             prompt = await app.shell.render_prompt()
@@ -122,42 +165,31 @@ async def run_repl(app: App) -> None:
         raw = raw.strip()
         if not raw:
             continue
+        if raw in _EXIT_KEYWORDS:
+            break
 
         await app.shell.append_history(raw)
         kind = await classify(raw, app.shell)
 
         match kind:
             case InputKind.SHELL:
-                key = tool_call_key("RunCommand", {"command": raw})
-                if app.permissions.evaluate(key) == PermissionLevel.DENY:
-                    print(f"[agentsh] denied: {raw}", file=sys.stderr)
-                    continue
-                try:
-                    await bus.publish(CommandStarted(command=raw))
-                    t0 = time.monotonic()
-                    result = cast(
-                        CommandResult,
-                        await app.tools.get("RunCommand").invoke(command=raw),
+                await bus.publish(CommandStarted(command=raw))
+                t0 = time.monotonic()
+                result = await app.shell.execute(raw)
+                result = replace(
+                    result,
+                    stdout=truncate_text(result.stdout),
+                    stderr=truncate_text(result.stderr),
+                )
+                duration_ms = (time.monotonic() - t0) * 1000
+                await bus.publish(
+                    CommandFinished(
+                        command=raw,
+                        exit_code=result.exit_code,
+                        duration_ms=duration_ms,
                     )
-                    duration_ms = (time.monotonic() - t0) * 1000
-                    await bus.publish(
-                        CommandFinished(
-                            command=raw,
-                            exit_code=result.exit_code,
-                            duration_ms=duration_ms,
-                        )
-                    )
-                    ui.render(result)
-                except PermissionDeniedError as e:
-                    duration_ms = (time.monotonic() - t0) * 1000
-                    await bus.publish(
-                        CommandFinished(
-                            command=raw,
-                            exit_code=126,
-                            duration_ms=duration_ms,
-                        )
-                    )
-                    print(f"[agentsh] {e}", file=sys.stderr)
+                )
+                ui.render(result)
 
             case InputKind.AGENT:
                 query = agent_query(raw)

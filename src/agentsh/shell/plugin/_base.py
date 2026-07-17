@@ -17,6 +17,38 @@ import os
 import uuid
 from abc import ABC, abstractmethod
 
+from agentsh.shell.plugin._stream import read_until_sentinel
+
+_CLOSE_TIMEOUT = 2.0
+
+
+async def prime_interactive_process(
+    proc: asyncio.subprocess.Process, setup_command: str, sentinel: str
+) -> None:
+    """Run startup setup on an interactive shell and drain its banner.
+
+    A shell started with ``-i`` sources the user's rc files so aliases,
+    functions, prompt hooks, and the real ``PS1`` are available. That
+    comes with two rough edges this smooths over before the process is
+    handed to the first ``execute``:
+
+    - Interactive shells enable history expansion; ``setup_command``
+      (e.g. bash ``set +H`` / zsh ``unsetopt bang_hist``) turns it back
+      off so a literal ``!`` in a command is not reinterpreted.
+    - An rc file may print a banner/motd to stdout on startup. This
+      writes ``setup_command`` followed by a one-off sentinel ``printf``
+      and reads stdout until that sentinel, consuming any banner so the
+      first real command reads a clean stream.
+
+    Does nothing if the process has no stdin/stdout pipe.
+    """
+    if proc.stdin is None or proc.stdout is None:
+        return
+    marker = new_marker(sentinel)
+    proc.stdin.write(f'{setup_command}\nprintf "%s\\n" "{marker}"\n'.encode())
+    await proc.stdin.drain()
+    await read_until_sentinel(proc.stdout, marker)
+
 
 def new_marker(sentinel: str) -> str:
     """Return a fresh, per-call sentinel marker combining sentinel and nonce.
@@ -86,8 +118,23 @@ class ProcessBackedShell(ABC):
 
         Guarded by the same lock as `execute` so a close cannot race a
         concurrent in-flight command.
+
+        Interactive shells (started with ``-i``) ignore ``SIGTERM``, so a
+        plain ``terminate()`` would hang ``wait()`` forever. Closing stdin
+        sends EOF, which an interactive shell treats as ``exit``; a short
+        bounded wait then escalates to ``kill()`` (``SIGKILL``, which
+        cannot be trapped) as a guaranteed backstop for any shell that
+        neither exits on EOF nor honours ``SIGTERM``.
         """
         async with self._lock:
-            if self._process and self._process.returncode is None:
-                self._process.terminate()
-                await self._process.wait()
+            proc = self._process
+            if proc is None or proc.returncode is not None:
+                return
+            if proc.stdin is not None and not proc.stdin.is_closing():
+                proc.stdin.close()
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=_CLOSE_TIMEOUT)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()

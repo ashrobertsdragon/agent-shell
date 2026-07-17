@@ -21,8 +21,8 @@ from agentsh.events import (
     EventBus,
 )
 from agentsh.models import CommandResult, ContextFragment, Message
-from agentsh.permissions import PermissionDeniedError, PermissionLevel
-from agentsh.repl import UI, run_repl
+from agentsh.permissions import PermissionLevel
+from agentsh.repl import UI, _handle_ctrl_c, run_repl
 
 
 @pytest.fixture(autouse=True)
@@ -118,11 +118,21 @@ async def test_blank_input_is_skipped() -> None:
     assert shell.render_prompt.call_count == 2
 
 
-async def test_shell_deny_skips_execution(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A DENY-level command is never sent to the RunCommand tool."""
+async def test_shell_input_bypasses_permissions_and_runs_directly() -> None:
+    """User-typed shell input executes straight on the shell backend even
+    when policy is DENY: the permission engine gates the agent's tool
+    calls, not the human at the keyboard. The shared RunCommand tool is
+    never consulted for user input.
+    """
     app, run_command = _make_app(permission_level=PermissionLevel.DENY)
+    shell = cast(AsyncMock, app.shell)
+    shell.execute = AsyncMock(
+        return_value=CommandResult(
+            stdout="hi\n", stderr="", exit_code=0, duration_ms=1.0, cwd="/tmp"
+        )
+    )
+    tools = cast(MagicMock, app.tools)
+    permissions = cast(MagicMock, app.permissions)
 
     with patch(
         "agentsh.repl.classify",
@@ -130,42 +140,17 @@ async def test_shell_deny_skips_execution(
     ):
         await _run_with_inputs(app, ["rm -rf /", EOFError()])
 
+    shell.execute.assert_called_once_with("rm -rf /")
     run_command.invoke.assert_not_called()
-    assert "denied" in capsys.readouterr().err
-
-
-async def test_shell_confirm_declined_still_invokes_and_pairs_events(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A declined CONFIRM prompt is enforced inside RunCommand.invoke()
-    itself (not pre-checked by the REPL, which only fast-paths DENY), so
-    invoke() is still called; it raises PermissionDeniedError, which the
-    REPL reports and pairs with a CommandFinished(exit_code=126) so the
-    dangling CommandStarted from the DENY-only fast-path is never left
-    unmatched.
-    """
-    app, run_command = _make_app(permission_level=PermissionLevel.CONFIRM)
-    run_command.invoke = AsyncMock(
-        side_effect=PermissionDeniedError("RunCommand denied by user: x")
-    )
-    finished: list[CommandFinished] = []
-    app.event_bus.subscribe(CommandFinished, finished.append)
-
-    with patch(
-        "agentsh.repl.classify",
-        new=AsyncMock(return_value=InputKind.SHELL),
-    ):
-        await _run_with_inputs(app, ["git commit -m x", EOFError()])
-
-    run_command.invoke.assert_called_once_with(command="git commit -m x")
-    assert "denied by user" in capsys.readouterr().err
-    assert [e.exit_code for e in finished] == [126]
+    tools.get.assert_not_called()
+    permissions.evaluate.assert_not_called()
 
 
 async def test_shell_success_publishes_events_and_renders() -> None:
     """A successful command publishes start/finish events and renders output."""
-    app, run_command = _make_app()
-    run_command.invoke = AsyncMock(
+    app, _ = _make_app()
+    shell = cast(AsyncMock, app.shell)
+    shell.execute = AsyncMock(
         return_value=CommandResult(
             stdout="hi\n", stderr="", exit_code=0, duration_ms=1.0, cwd="/tmp"
         )
@@ -182,28 +167,54 @@ async def test_shell_success_publishes_events_and_renders() -> None:
     ):
         await _run_with_inputs(app, ["echo hi", EOFError()], ui=ui)
 
-    run_command.invoke.assert_called_once_with(command="echo hi")
+    shell.execute.assert_called_once_with("echo hi")
     assert [e.command for e in started] == ["echo hi"]
     assert [e.exit_code for e in finished] == [0]
     ui.render.assert_called_once()
 
 
-async def test_shell_permission_denied_error_is_handled(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A PermissionDeniedError raised by invoke() is caught and reported."""
-    app, run_command = _make_app()
-    run_command.invoke = AsyncMock(
-        side_effect=PermissionDeniedError("blocked by policy")
-    )
+@pytest.mark.parametrize("word", ["exit", "quit"])
+async def test_exit_keyword_breaks_loop_without_dispatch(word: str) -> None:
+    """`exit`/`quit` leave the REPL directly, never reaching classify or
+    the shell subprocess (so they can't be swallowed by a subshell).
+    """
+    app, _ = _make_app()
+    shell = cast(AsyncMock, app.shell)
 
-    with patch(
-        "agentsh.repl.classify",
-        new=AsyncMock(return_value=InputKind.SHELL),
-    ):
-        await _run_with_inputs(app, ["rm -rf /", EOFError()])
+    with patch("agentsh.repl.classify", new=AsyncMock()) as classify_mock:
+        await _run_with_inputs(app, [word])
 
-    assert "blocked by policy" in capsys.readouterr().err
+    classify_mock.assert_not_called()
+    shell.append_history.assert_not_called()
+    shell.execute.assert_not_called()
+
+
+async def test_repl_closes_shell_on_exit() -> None:
+    """The shell subprocess is closed when the loop ends."""
+    app, _ = _make_app()
+    shell = cast(AsyncMock, app.shell)
+    await _run_with_inputs(app, [EOFError()])
+    shell.close.assert_awaited_once()
+
+
+def test_ctrl_c_clears_nonempty_line() -> None:
+    """Ctrl+C on a partially typed line clears it without leaving the REPL."""
+    event = MagicMock()
+    event.current_buffer.text = "half-typed"
+    _handle_ctrl_c(event)
+    event.current_buffer.reset.assert_called_once()
+    event.app.exit.assert_not_called()
+
+
+def test_ctrl_c_on_empty_prompt_exits() -> None:
+    """Ctrl+C at an empty prompt exits by making prompt_async raise EOF."""
+    event = MagicMock()
+    event.current_buffer.text = ""
+    _handle_ctrl_c(event)
+    event.current_buffer.reset.assert_not_called()
+    event.app.exit.assert_called_once()
+    (_, kwargs) = event.app.exit.call_args
+    assert isinstance(kwargs["exception"], EOFError)
 
 
 async def test_agent_path_builds_context_and_runs_loop() -> None:
@@ -424,6 +435,9 @@ class _FakeShell:
     async def render_prompt(self) -> str:
         """Return a fixed prompt string."""
         return "agentsh> "
+
+    async def close(self) -> None:
+        """No-op close (run_repl closes the shell on exit)."""
 
 
 class _FakeApp:

@@ -94,7 +94,7 @@ class PermissionEngine:
       - ``"{tool_name}"`` for any other tool
     """
 
-    def __init__(self, rules: PermissionRulesConfig) -> None:
+    def __init__(self, rules: PermissionsConfig) -> None:
         """Initialise with a set of allow/confirm/deny glob patterns."""
         self._rules = rules
 

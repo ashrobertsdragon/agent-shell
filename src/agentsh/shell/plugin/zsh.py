@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-import shlex
 import subprocess
 import time
 import warnings
@@ -12,7 +11,11 @@ from agentsh.history_security import append_secure_line, env_flag_enabled
 from agentsh.limits import read_capped_text, read_last_lines
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
-from agentsh.shell.plugin._base import ProcessBackedShell, new_marker
+from agentsh.shell.plugin._base import (
+    ProcessBackedShell,
+    new_marker,
+    prime_interactive_process,
+)
 from agentsh.shell.plugin._stderr_file import (
     create_stderr_tempfile,
     discard_stderr_tempfile,
@@ -96,13 +99,24 @@ class ZshShell(ProcessBackedShell):
         self._histfile_mirror_warned = False
 
     async def _start_process(self) -> asyncio.subprocess.Process:
-        """Start the zsh subprocess."""
-        return await asyncio.create_subprocess_exec(
+        """Start an interactive zsh subprocess and prime it.
+
+        ``zsh -i`` sources the user's startup files, so the persistent
+        backend has the same aliases, functions, ``precmd`` prompt hooks
+        and real ``PS1`` as the user's normal shell (issue: prompt and
+        aliases were previously missing because the backend was
+        non-interactive). ``prime_interactive_process`` disables history
+        expansion and drains any rc banner before the first command runs.
+        """
+        proc = await asyncio.create_subprocess_exec(
             "zsh",
+            "-i",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
+        await prime_interactive_process(proc, "unsetopt bang_hist", _SENTINEL)
+        return proc
 
     async def execute(self, command: str) -> CommandResult:
         """Execute a shell command.
@@ -125,11 +139,16 @@ class ZshShell(ProcessBackedShell):
 
             start = time.monotonic()
             marker = new_marker(_SENTINEL)
+            # Capture only the command's own stderr via a group redirect,
+            # never the shell's fd 2. An interactive backend (-i) prints
+            # its prompt to fd 2 before each line it reads; that fd stays
+            # pointed at DEVNULL (see _start_process), so those prompts
+            # are discarded instead of polluting the captured stderr.
+            # Redirecting the shell's fd 2 with `exec` (the old approach)
+            # would have swept the prompts into stderr_path.
             wrapped = (
-                f"exec 3>&2 2>{stderr_path}\n"
-                f"{command}\n"
+                f"{{ {command}\n}} 2>{stderr_path}\n"
                 f"__ec__=$?\n"
-                f"exec 2>&3 3>&-\n"
                 f'printf "%s:%d:%s\\n" "{marker}" "$__ec__" "$(pwd)"\n'
             )
             exit_code: int
@@ -225,41 +244,46 @@ class ZshShell(ProcessBackedShell):
         return await asyncio.to_thread(_check)
 
     async def render_prompt(self) -> str:
-        """Evaluate PS1 via zsh -i so the prompt configuration is active.
+        r"""Render the prompt from the live interactive zsh subprocess.
 
-        zsh -i sources .zshrc. ``${(%)PS1}`` is zsh's parameter-expansion
-        flag for prompt-sequence expansion (the analogue of bash's
-        ``${PS1@P}``): it expands ``%``-escapes -- including command
-        substitutions used by prompt frameworks -- the same way they
-        would be expanded when PS1 is actually displayed as a prompt.
+        The persistent process is interactive, so it holds the user's
+        prompt hooks and real ``PS1``. zsh's dynamic prompt frameworks
+        (starship, powerlevel10k) rebuild ``PS1`` from a ``precmd`` hook
+        rather than a single variable, so the ``precmd_functions`` hooks
+        (and a bare ``precmd`` if defined) are run first, their output
+        discarded, before ``${(%)PS1}`` is expanded -- the zsh analogue
+        of bash's ``${PS1@P}``. The prompt is printed with no trailing
+        newline, then a newline plus a sentinel line terminate it; the
+        one injected newline is stripped from the collected output.
+        Readline non-printing markers (``\001``/``\002``) are removed.
+        Any failure falls back to a plain ``cwd$`` prompt.
         """
         fallback = f"{self._cwd}$ "
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "zsh",
-                "-i",
-                "-c",
-                f"cd {shlex.quote(self._cwd)} && printf '%s' \"${{(%)PS1}}\"",
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-                env=os.environ,
-            )
-        except OSError:
+            async with self._lock:
+                proc = await self.process
+                if not proc.stdin or not proc.stdout:
+                    return fallback
+                marker = new_marker(_SENTINEL)
+                proc.stdin.write(
+                    b'for f in "${precmd_functions[@]}"; do "$f"; done'
+                    b" >/dev/null 2>&1\n"
+                    b"(( $+functions[precmd] )) && precmd >/dev/null 2>&1\n"
+                    b'printf "%s" "${(%)PS1}"\n'
+                    + f'printf "\\n%s\\n" "{marker}"\n'.encode()
+                )
+                await proc.stdin.drain()
+                collected, sentinel_line = await asyncio.wait_for(
+                    read_until_sentinel(proc.stdout, marker),
+                    timeout=_PROMPT_TIMEOUT,
+                )
+        except (TimeoutError, ChildProcessError, OSError):
             return fallback
-        try:
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=_PROMPT_TIMEOUT
-            )
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
+        if not sentinel_line:
             return fallback
-        prompt = (
-            stdout.decode(errors="replace")
-            .replace("\001", "")
-            .replace("\002", "")
-        )
+        prompt = collected.replace("\001", "").replace("\002", "")
+        if prompt.endswith("\n"):
+            prompt = prompt[:-1]
         return prompt or fallback
 
     async def append_history(self, command: str) -> None:

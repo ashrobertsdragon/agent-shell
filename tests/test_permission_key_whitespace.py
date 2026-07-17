@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agentsh.config import PermissionRulesConfig
+from agentsh.config import PermissionsConfig
 from agentsh.permissions import (
     PermissionDeniedError,
     PermissionEngine,
@@ -34,7 +34,7 @@ def mock_shell() -> AsyncMock:
 
 async def test_stripped_command_is_denied(mock_shell: AsyncMock) -> None:
     """Sanity check: an exact-match command is denied as expected."""
-    rules = PermissionRulesConfig(deny={"RunCommand:rm -rf*"})
+    rules = PermissionsConfig(deny={"RunCommand:rm -rf*"})
     tool = RunCommand(shell=mock_shell, permissions=PermissionEngine(rules))
 
     with pytest.raises(PermissionDeniedError):
@@ -53,7 +53,7 @@ async def test_whitespace_padded_command_still_denied(
     via tool_call_key() before matching, so "  rm -rf /tmp/x" is keyed
     identically to "rm -rf /tmp/x".
     """
-    rules = PermissionRulesConfig(deny={"RunCommand:rm -rf*"})
+    rules = PermissionsConfig(deny={"RunCommand:rm -rf*"})
     tool = RunCommand(shell=mock_shell, permissions=PermissionEngine(rules))
 
     with pytest.raises(PermissionDeniedError):
@@ -69,7 +69,7 @@ async def test_engine_evaluate_itself_is_whitespace_sensitive() -> None:
     fix lives in always routing key construction through the single
     tool_call_key() helper, not in evaluate() itself.
     """
-    rules = PermissionRulesConfig(deny={"RunCommand:rm -rf*"})
+    rules = PermissionsConfig(deny={"RunCommand:rm -rf*"})
     engine = PermissionEngine(rules)
 
     assert engine.evaluate("RunCommand:rm -rf /tmp/x") == PermissionLevel.DENY

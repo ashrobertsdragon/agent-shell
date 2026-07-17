@@ -45,30 +45,76 @@ class _SpawnRecorder:
         return self.proc
 
 
-async def test_bash_render_prompt_kills_subprocess_on_timeout(
+class _FakeStdin:
+    """Writable stand-in for a subprocess stdin StreamWriter."""
+
+    def write(self, data: bytes) -> None:
+        """Discard written bytes."""
+
+    async def drain(self) -> None:
+        """No-op drain."""
+
+    def is_closing(self) -> bool:
+        """Report the writer as open."""
+        return False
+
+    def close(self) -> None:
+        """No-op close."""
+
+
+class _HangingStdout:
+    """stdout stand-in whose reads never complete, forcing a timeout."""
+
+    async def readuntil(self, sep: bytes) -> bytes:
+        """Block until cancelled."""
+        await asyncio.sleep(3600)
+        return b""
+
+
+class _PersistentFakeProc:
+    """A live-looking persistent subprocess for render_prompt tests."""
+
+    def __init__(self, stdout: object) -> None:
+        self.returncode: int | None = None
+        self.stdin = _FakeStdin()
+        self.stdout = stdout
+
+
+def _reader(data: bytes) -> asyncio.StreamReader:
+    """Return a StreamReader pre-loaded with data and EOF."""
+    reader = asyncio.StreamReader()
+    reader.feed_data(data)
+    reader.feed_eof()
+    return reader
+
+
+async def test_bash_render_prompt_falls_back_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A timed-out prompt subprocess is killed, not leaked."""
-    spawn = _SpawnRecorder()
-    monkeypatch.setattr(bash_module.asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(bash_module, "_PROMPT_TIMEOUT", 0.01, raising=False)
+    """A prompt read that never yields a sentinel falls back to cwd$ ."""
     shell = BashShell()
+    shell._process = _PersistentFakeProc(_HangingStdout())  # type: ignore[assignment]
+    shell._desynced = False
+    monkeypatch.setattr(bash_module, "_PROMPT_TIMEOUT", 0.01, raising=False)
     prompt = await shell.render_prompt()
-    assert prompt.endswith("$ ")
-    assert spawn.proc.killed is True
-    assert spawn.proc.returncode is not None
+    assert prompt == f"{shell.cwd}$ "
 
 
-async def test_bash_render_prompt_redirects_stdin(
+async def test_bash_render_prompt_parses_from_persistent_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The prompt subprocess must not inherit the REPL's stdin."""
-    spawn = _SpawnRecorder()
-    monkeypatch.setattr(bash_module.asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(bash_module, "_PROMPT_TIMEOUT", 0.01, raising=False)
+    """render_prompt reads PS1 from the live subprocess, strips the one
+    injected trailing newline and readline non-printing markers, and
+    ignores the sentinel line.
+    """
+    monkeypatch.setattr(bash_module, "new_marker", lambda _s: "MARK")
     shell = BashShell()
-    await shell.render_prompt()
-    assert spawn.kwargs.get("stdin") == asyncio.subprocess.DEVNULL
+    shell._process = _PersistentFakeProc(  # type: ignore[assignment]
+        _reader(b"my\x01prompt\x02\nMARK\n")
+    )
+    shell._desynced = False
+    prompt = await shell.render_prompt()
+    assert prompt == "myprompt"
 
 
 async def test_powershell_render_prompt_kills_subprocess_on_timeout(

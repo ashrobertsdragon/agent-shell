@@ -12,7 +12,11 @@ from agentsh.history_security import append_secure_line, env_flag_enabled
 from agentsh.limits import read_capped_text, read_last_lines
 from agentsh.models import CommandResult
 from agentsh.shell._registry import register
-from agentsh.shell.plugin._base import ProcessBackedShell, new_marker
+from agentsh.shell.plugin._base import (
+    ProcessBackedShell,
+    new_marker,
+    prime_interactive_process,
+)
 from agentsh.shell.plugin._stderr_file import (
     create_stderr_tempfile,
     discard_stderr_tempfile,
@@ -64,13 +68,24 @@ class BashShell(ProcessBackedShell):
         self._histfile_mirror_warned = False
 
     async def _start_process(self) -> asyncio.subprocess.Process:
-        """Start the bash subprocess."""
-        return await asyncio.create_subprocess_exec(
+        """Start an interactive bash subprocess and prime it.
+
+        ``bash -i`` sources the user's startup files, so the persistent
+        backend has the same aliases, functions, ``PROMPT_COMMAND`` and
+        real ``PS1`` as the user's normal shell (issue: prompt/aliases
+        were previously missing because the backend was non-interactive).
+        ``prime_interactive_process`` disables history expansion and
+        drains any rc banner before the first command runs.
+        """
+        proc = await asyncio.create_subprocess_exec(
             "bash",
+            "-i",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
+        await prime_interactive_process(proc, "set +H", _SENTINEL)
+        return proc
 
     async def execute(self, command: str) -> CommandResult:
         """Execute a shell command.
@@ -93,11 +108,16 @@ class BashShell(ProcessBackedShell):
 
             start = time.monotonic()
             marker = new_marker(_SENTINEL)
+            # Capture only the command's own stderr via a group redirect,
+            # never the shell's fd 2. An interactive backend (-i) prints
+            # its PS1 prompt to fd 2 before each line it reads; that fd
+            # stays pointed at DEVNULL (see _start_process), so those
+            # prompts are discarded instead of polluting the captured
+            # stderr. Redirecting the shell's fd 2 with `exec` (the old
+            # approach) would have swept the prompts into stderr_path.
             wrapped = (
-                f"exec 3>&2 2>{stderr_path}\n"
-                f"{command}\n"
+                f"{{ {command}\n}} 2>{stderr_path}\n"
                 f"__ec__=$?\n"
-                f"exec 2>&3 3>&-\n"
                 f'printf "%s:%d:%s\\n" "{marker}" "$__ec__" "$(pwd)"\n'
             )
             exit_code: int
@@ -190,38 +210,44 @@ class BashShell(ProcessBackedShell):
         return await asyncio.to_thread(_check)
 
     async def render_prompt(self) -> str:
-        """Evaluate PS1 via bash -i so the prompt configuration is active.
+        r"""Render the prompt from the live interactive bash subprocess.
 
-        bash -i sources .bashrc. ${PS1@P} expands all prompt sequences including
-        command substitutions (starship, powerline, etc.).
+        The persistent process is interactive, so it holds the user's
+        ``PROMPT_COMMAND`` and real ``PS1``. Running ``PROMPT_COMMAND``
+        (its stdout/stderr discarded) and then expanding ``${PS1@P}``
+        reproduces exactly what bash would draw each turn, including
+        frameworks that rebuild ``PS1`` on every prompt via
+        ``PROMPT_COMMAND`` (starship, git-prompt, powerline). The
+        expanded prompt is printed without a trailing newline, then a
+        newline plus a sentinel line terminates it; the collected output
+        is the prompt followed by that one injected newline, which is
+        stripped. Readline non-printing markers (``\001``/``\002``) are
+        removed. Any failure falls back to a plain ``cwd$`` prompt.
         """
         fallback = f"{self._cwd}$ "
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "bash",
-                "-i",
-                "-c",
-                f"cd {shlex.quote(self._cwd)} && printf '%s' \"${{PS1@P}}\"",
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-                env=os.environ,
-            )
-        except OSError:
+            async with self._lock:
+                proc = await self.process
+                if not proc.stdin or not proc.stdout:
+                    return fallback
+                marker = new_marker(_SENTINEL)
+                proc.stdin.write(
+                    b'eval "${PROMPT_COMMAND:-}" >/dev/null 2>&1\n'
+                    b'printf "%s" "${PS1@P}"\n'
+                    + f'printf "\\n%s\\n" "{marker}"\n'.encode()
+                )
+                await proc.stdin.drain()
+                collected, sentinel_line = await asyncio.wait_for(
+                    read_until_sentinel(proc.stdout, marker),
+                    timeout=_PROMPT_TIMEOUT,
+                )
+        except (TimeoutError, ChildProcessError, OSError):
             return fallback
-        try:
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=_PROMPT_TIMEOUT
-            )
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
+        if not sentinel_line:
             return fallback
-        prompt = (
-            stdout.decode(errors="replace")
-            .replace("\001", "")
-            .replace("\002", "")
-        )
+        prompt = collected.replace("\001", "").replace("\002", "")
+        if prompt.endswith("\n"):
+            prompt = prompt[:-1]
         return prompt or fallback
 
     async def append_history(self, command: str) -> None:

@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from agentsh.config import PermissionRulesConfig
+from agentsh.config import PermissionsConfig
 from agentsh.permissions import PermissionDeniedError, PermissionEngine
 from agentsh.tools import write_file as write_file_module
 from agentsh.tools.write_file import WriteFile
@@ -14,7 +14,7 @@ from agentsh.tools.write_file import WriteFile
 @pytest.fixture
 def allow_all() -> PermissionEngine:
     """PermissionEngine that ALLOWs every WriteFile call."""
-    return PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    return PermissionEngine(PermissionsConfig(allow={"WriteFile:*"}))
 
 
 async def test_full_write(tmp_path: Path, allow_all: PermissionEngine) -> None:
@@ -123,7 +123,7 @@ async def test_write_deny_raises_without_touching_file(
     """A DENY-matched path raises PermissionDeniedError and never writes."""
     f = tmp_path / "protected.txt"
     key = f"WriteFile:{f.resolve().as_posix()}"
-    permissions = PermissionEngine(PermissionRulesConfig(deny={key}))
+    permissions = PermissionEngine(PermissionsConfig(deny={key}))
     tool = WriteFile(permissions=permissions)
     with pytest.raises(PermissionDeniedError):
         await tool.invoke(path=str(f), content="malicious")
@@ -136,7 +136,7 @@ async def test_write_confirm_blocks_without_callback(tmp_path: Path) -> None:
     """
     f = tmp_path / "protected.txt"
     key = f"WriteFile:{f.resolve().as_posix()}"
-    permissions = PermissionEngine(PermissionRulesConfig(confirm={key}))
+    permissions = PermissionEngine(PermissionsConfig(confirm={key}))
     tool = WriteFile(permissions=permissions)
     with pytest.raises(PermissionDeniedError):
         await tool.invoke(path=str(f), content="unattended write")
@@ -149,7 +149,7 @@ async def test_write_confirm_proceeds_when_callback_approves(
     """A CONFIRM-matched path writes once the confirm callback approves it."""
     f = tmp_path / "protected.txt"
     key = f"WriteFile:{f.resolve().as_posix()}"
-    permissions = PermissionEngine(PermissionRulesConfig(confirm={key}))
+    permissions = PermissionEngine(PermissionsConfig(confirm={key}))
     confirm = AsyncMock(return_value=True)
     tool = WriteFile(permissions=permissions, confirm=confirm)
     await tool.invoke(path=str(f), content="approved write")
@@ -162,7 +162,7 @@ async def test_write_confirm_blocks_when_callback_declines(
     """A CONFIRM-matched path is blocked when the confirm callback declines."""
     f = tmp_path / "protected.txt"
     key = f"WriteFile:{f.resolve().as_posix()}"
-    permissions = PermissionEngine(PermissionRulesConfig(confirm={key}))
+    permissions = PermissionEngine(PermissionsConfig(confirm={key}))
     confirm = AsyncMock(return_value=False)
     tool = WriteFile(permissions=permissions, confirm=confirm)
     with pytest.raises(PermissionDeniedError):
@@ -184,7 +184,7 @@ async def test_write_outside_sandbox_root_denied_even_when_allowed(
     sandbox = tmp_path / "workspace"
     sandbox.mkdir()
     outside = tmp_path / "outside" / "escaped.txt"
-    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    permissions = PermissionEngine(PermissionsConfig(allow={"WriteFile:*"}))
     tool = WriteFile(permissions=permissions, sandbox_roots=[sandbox])
 
     with pytest.raises(PermissionDeniedError):
@@ -199,7 +199,7 @@ async def test_write_inside_sandbox_root_succeeds(tmp_path: Path) -> None:
     sandbox = tmp_path / "workspace"
     sandbox.mkdir()
     target = sandbox / "nested" / "file.txt"
-    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    permissions = PermissionEngine(PermissionsConfig(allow={"WriteFile:*"}))
     tool = WriteFile(permissions=permissions, sandbox_roots=[sandbox])
 
     await tool.invoke(path=str(target), content="hello")
@@ -212,7 +212,7 @@ async def test_write_sandbox_root_itself_is_writable(tmp_path: Path) -> None:
     sandbox = tmp_path / "workspace"
     sandbox.mkdir()
     target = sandbox / "top-level.txt"
-    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    permissions = PermissionEngine(PermissionsConfig(allow={"WriteFile:*"}))
     tool = WriteFile(permissions=permissions, sandbox_roots=[sandbox])
 
     await tool.invoke(path=str(target), content="hello")
@@ -252,7 +252,7 @@ async def test_write_dotdot_traversal_out_of_sandbox_denied(
     sandbox = tmp_path / "workspace"
     sandbox.mkdir()
     escaped = tmp_path / "outside.txt"
-    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    permissions = PermissionEngine(PermissionsConfig(allow={"WriteFile:*"}))
     tool = WriteFile(permissions=permissions, sandbox_roots=[sandbox])
 
     with pytest.raises(PermissionDeniedError):
@@ -278,7 +278,7 @@ async def test_write_via_symlink_escaping_sandbox_denied(
     outside_dir.mkdir()
     link = sandbox / "escape-link"
     link.symlink_to(outside_dir)
-    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    permissions = PermissionEngine(PermissionsConfig(allow={"WriteFile:*"}))
     tool = WriteFile(permissions=permissions, sandbox_roots=[sandbox])
 
     with pytest.raises(PermissionDeniedError):
@@ -297,7 +297,7 @@ async def test_write_via_symlink_inside_sandbox_succeeds(
     real_dir.mkdir()
     link = sandbox / "alias"
     link.symlink_to(real_dir)
-    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    permissions = PermissionEngine(PermissionsConfig(allow={"WriteFile:*"}))
     tool = WriteFile(permissions=permissions, sandbox_roots=[sandbox])
 
     await tool.invoke(path=str(link / "file.txt"), content="hello")
@@ -317,7 +317,7 @@ async def test_sandbox_roots_are_canonicalized_by_the_tool(
     sandbox.mkdir()
     outside = tmp_path / "outside.txt"
     non_canonical_root = tmp_path / "workspace" / ".." / "workspace"
-    permissions = PermissionEngine(PermissionRulesConfig(allow={"WriteFile:*"}))
+    permissions = PermissionEngine(PermissionsConfig(allow={"WriteFile:*"}))
     tool = WriteFile(
         permissions=permissions, sandbox_roots=[non_canonical_root]
     )
