@@ -22,7 +22,9 @@ from agentsh.events import (
 )
 from agentsh.models import CommandResult, ContextFragment, Message
 from agentsh.permissions import PermissionLevel
-from agentsh.repl import UI, _handle_ctrl_c, run_repl
+from prompt_toolkit.output.color_depth import ColorDepth
+
+from agentsh.repl import UI, _detect_color_depth, _handle_ctrl_c, run_repl
 
 
 @pytest.fixture(autouse=True)
@@ -531,3 +533,29 @@ async def test_run_repl_breaks_on_eof_without_looping(tmp_path: Path) -> None:
     app = _FakeApp()
     await run_repl(app)  # type: ignore[arg-type]
     app.event_bus.publish.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["truecolor", "24bit", "TrueColor", "24BIT"])
+def test_detect_color_depth_promotes_truecolor(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """A truecolor COLORTERM forces 24-bit so starship RGB isn't quantized."""
+    monkeypatch.setenv("COLORTERM", value)
+    assert _detect_color_depth() == ColorDepth.DEPTH_24_BIT
+
+
+@pytest.mark.parametrize("value", ["", "rxvt", "Eterm", "1", "256"])
+def test_detect_color_depth_defers_when_not_truecolor(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Non-truecolor COLORTERM defers to prompt_toolkit's TERM detection."""
+    monkeypatch.setenv("COLORTERM", value)
+    assert _detect_color_depth() is None
+
+
+def test_detect_color_depth_defers_when_colorterm_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unset COLORTERM defers rather than assuming truecolor."""
+    monkeypatch.delenv("COLORTERM", raising=False)
+    assert _detect_color_depth() is None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections.abc import Mapping
@@ -13,6 +14,7 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
+from prompt_toolkit.output.color_depth import ColorDepth
 
 from agentsh.agent_loop import AgentLoopLimitError, run_agent_loop
 from agentsh.app import App
@@ -121,6 +123,22 @@ def _build_key_bindings() -> KeyBindings:
     return bindings
 
 
+def _detect_color_depth() -> ColorDepth | None:
+    """Return 24-bit depth when the terminal advertises truecolor.
+
+    Starship (and similar prompts) emit 24-bit RGB escapes, but
+    prompt_toolkit's ``get_default_color_depth`` never promotes above
+    256 colors on its own, so a truecolor prompt gets quantized and
+    subtly shifts hue. ``COLORTERM`` is the de-facto truecolor signal;
+    its only meaningful values are ``truecolor`` and ``24bit``. For
+    anything else, return ``None`` to defer to prompt_toolkit's own
+    ``TERM``-based detection (256 / 16 / mono).
+    """
+    if os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit"):
+        return ColorDepth.DEPTH_24_BIT
+    return None
+
+
 async def run_repl(app: App) -> None:
     """Run the main REPL loop until EOF or KeyboardInterrupt."""
     history_dir = Path.home() / ".local" / "share" / "agentsh"
@@ -129,6 +147,7 @@ async def run_repl(app: App) -> None:
     session: PromptSession[str] = PromptSession(
         history=FileHistory(str(history_path)),
         key_bindings=_build_key_bindings(),
+        color_depth=_detect_color_depth(),
     )
     ui = UI(session)
     app.ui = ui
